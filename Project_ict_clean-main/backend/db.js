@@ -1,16 +1,73 @@
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 require('dotenv').config();
 
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'workload_db',
-  port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306,
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+// ตั้งค่าการเชื่อมต่อ PostgreSQL (Supabase)
+const pool = new Pool({
+  host: process.env.DB_HOST || 'aws-0-ap-southeast-1.pooler.supabase.com',
+  user: process.env.DB_USER || 'postgres.rnkbggcmzgdblkfevkqy',
+  password: process.env.DB_PASSWORD || 'iloveyousomuch/1235*',
+  database: process.env.DB_NAME || 'postgres',
+  port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 6543,
+  ssl: process.env.DB_SSL === 'false' ? false : { rejectUnauthorized: false },
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000,
 });
+
+/**
+ * แปลง SQL จาก MySQL syntax เป็น PostgreSQL syntax อัตโนมัติ:
+ * 1. แปลง ? เป็น $1, $2, $3, ...
+ * 2. แปลง ISNULL(expr) เป็น ((expr) IS NULL)
+ * 3. เติม RETURNING id สำหรับคำสั่ง INSERT เพื่อให้ได้ insertId เหมือน MySQL
+ */
+function transformSql(sql) {
+  let paramIndex = 1;
+  let transformed = sql.replace(/\?/g, () => `$${paramIndex++}`);
+  
+  // แปลง MySQL ISNULL() เป็น PostgreSQL IS NULL
+  transformed = transformed.replace(/ISNULL\(([^)]+)\)/gi, '(($1) IS NULL)');
+  
+  // หากเป็น INSERT และยังไม่มี RETURNING ให้เติม RETURNING id
+  if (/^\s*INSERT\s+INTO\s+/i.test(transformed) && !/RETURNING\s+/i.test(transformed)) {
+    transformed += ' RETURNING id';
+  }
+  
+  return transformed;
+}
+
+/**
+ * Execute query Wrapper ให้คืนค่า [rows, result] เหมือน mysql2/promise
+ */
+async function executeQuery(clientOrPool, sql, params = []) {
+  const transformedSql = transformSql(sql);
+  
+  // แปลงค่า undefined เป็น null เพื่อความปลอดภัยใน pg
+  const sanitizedParams = (params || []).map(p => (p === undefined ? null : p));
+
+  const result = await clientOrPool.query(transformedSql, sanitizedParams);
+  
+  // จำลอง insertId สำหรับคำสั่ง INSERT
+  if (result.rows && result.rows.length > 0 && result.rows[0].id !== undefined) {
+    result.insertId = result.rows[0].id;
+  }
+  
+  return [result.rows, result];
+}
+
+// Wrapper สำหรับ pool.query
+const db = {
+  query: async (sql, params) => executeQuery(pool, sql, params),
+  
+  getConnection: async () => {
+    const client = await pool.connect();
+    return {
+      query: async (sql, params) => executeQuery(client, sql, params),
+      release: () => client.release(),
+    };
+  },
+  
+  end: () => pool.end(),
+};
 
 // ข้อมูลบุคลากรตั้งต้น คณะเทคโนโลยีสารสนเทศและการสื่อสาร มหาวิทยาลัยพะเยา (8 สาขาวิชา)
 const UP_ICT_FACULTY = [
@@ -103,13 +160,14 @@ const UP_ICT_FACULTY = [
 ];
 
 async function initDatabase() {
+  let conn;
   try {
-    const conn = await pool.getConnection();
+    conn = await db.getConnection();
 
     // 1. ตาราง users
     await conn.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         azure_id VARCHAR(255) NULL,
         email VARCHAR(255) NOT NULL UNIQUE,
         full_name VARCHAR(255) NULL,
@@ -122,36 +180,18 @@ async function initDatabase() {
         password_hash VARCHAR(255) NULL,
         role VARCHAR(50) DEFAULT 'user',
         program_id INT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
-
-    // Migration users: เพิ่มคอลัมน์ใหม่หากยังไม่มี
-    const userColumns = [
-      { name: 'name_en', type: 'VARCHAR(255) NULL' },
-      { name: 'name_th', type: 'VARCHAR(255) NULL' },
-      { name: 'department', type: 'VARCHAR(255) NULL' },
-      { name: 'position', type: 'VARCHAR(255) NULL' },
-      { name: 'scholar_id', type: 'VARCHAR(100) NULL' },
-      { name: 'scopus_id', type: 'VARCHAR(100) NULL' },
-      { name: 'password_hash', type: 'VARCHAR(255) NULL' }
-    ];
-    for (const col of userColumns) {
-      try {
-        await conn.query(`ALTER TABLE users ADD COLUMN ${col.name} ${col.type}`);
-      } catch (err) {
-        // ละเว้นถ้ามีแล้ว
-      }
-    }
 
     // 2. ตาราง programs
     await conn.query(`
       CREATE TABLE IF NOT EXISTS programs (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         degree VARCHAR(100) NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // 3. ตาราง entries (ภาระงานที่คำนวณและบันทึก)
@@ -174,77 +214,72 @@ async function initDatabase() {
         keywords TEXT NULL,
         type VARCHAR(255) NOT NULL,
         db VARCHAR(255) NULL,
-        proportion DECIMAL(5,2) DEFAULT 100,
+        proportion NUMERIC(5,2) DEFAULT 100,
         date VARCHAR(100) NULL,
         code VARCHAR(50) NULL,
-        base_hours DECIMAL(10,2) DEFAULT 0,
-        quality DECIMAL(10,2) DEFAULT 0,
-        actual_hours DECIMAL(10,2) DEFAULT 0,
-        faculty DECIMAL(10,2) DEFAULT 0,
+        base_hours NUMERIC(10,2) DEFAULT 0,
+        quality NUMERIC(10,2) DEFAULT 0,
+        actual_hours NUMERIC(10,2) DEFAULT 0,
+        faculty NUMERIC(10,2) DEFAULT 0,
         faculty_note TEXT NULL,
-        uni DECIMAL(10,2) DEFAULT 0,
-        date_info JSON NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        uni NUMERIC(10,2) DEFAULT 0,
+        date_info JSONB NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // 4. ตาราง papers (ผลงานวิจัยที่ซิงก์จาก Google Scholar หรือนำเข้า)
     await conn.query(`
       CREATE TABLE IF NOT EXISTS papers (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
         publish_year INT NULL,
         authors_raw TEXT NULL,
         cited_by INT DEFAULT 0,
         scholar_url TEXT NULL,
         source VARCHAR(50) DEFAULT 'scholar',
-        status ENUM('DRAFT_AUTO', 'PENDING_CO_AUTHOR', 'COMPLETED') DEFAULT 'DRAFT_AUTO',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        status VARCHAR(50) DEFAULT 'DRAFT_AUTO',
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // 5. ตาราง paper_authors (Co-author & Contribution allocation)
     await conn.query(`
       CREATE TABLE IF NOT EXISTS paper_authors (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        paper_id INT NOT NULL,
-        user_id INT NOT NULL,
-        contribution_percent DECIMAL(5,2) DEFAULT 0.00,
-        is_first_author TINYINT(1) DEFAULT 0,
-        is_co_first_author TINYINT(1) DEFAULT 0,
-        is_corresponding TINYINT(1) DEFAULT 0,
-        is_co_corresponding TINYINT(1) DEFAULT 0,
+        id SERIAL PRIMARY KEY,
+        paper_id INT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        contribution_percent NUMERIC(5,2) DEFAULT 0.00,
+        is_first_author SMALLINT DEFAULT 0,
+        is_co_first_author SMALLINT DEFAULT 0,
+        is_corresponding SMALLINT DEFAULT 0,
+        is_co_corresponding SMALLINT DEFAULT 0,
         author_order INT NULL,
-        status ENUM('PENDING', 'CONFIRMED') DEFAULT 'PENDING',
-        confirmed_at TIMESTAMP NULL,
-        UNIQUE KEY uq_paper_user (paper_id, user_id),
-        INDEX idx_paper_authors_roles (is_first_author, is_corresponding, is_co_first_author, is_co_corresponding),
-        INDEX idx_paper_authors_order (paper_id, author_order),
-        FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        status VARCHAR(50) DEFAULT 'PENDING',
+        confirmed_at TIMESTAMPTZ NULL,
+        CONSTRAINT uq_paper_user UNIQUE (paper_id, user_id)
+      );
     `);
 
     // 6. ตาราง paper_blacklists (ผลงานที่อาจารย์กดปฏิเสธ ไม่ใช่ของฉัน)
     await conn.query(`
       CREATE TABLE IF NOT EXISTS paper_blacklists (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         scholar_title VARCHAR(500) NOT NULL,
-        rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE KEY uq_user_title (user_id, scholar_title(255)),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        rejected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_user_title UNIQUE (user_id, scholar_title)
+      );
     `);
 
     // 7. ตาราง research_papers (เก็บผลการสกัดจาก PDF ผ่าน GROBID + Gemini AI)
     await conn.query(`
       CREATE TABLE IF NOT EXISTS research_papers (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         article_title TEXT,
         publish_date DATE NULL,
-        authors JSON NULL,
+        authors JSONB NULL,
         author_contribution TEXT NULL,
         file_name VARCHAR(255) NULL,
         bucket_name VARCHAR(255) NULL,
@@ -257,9 +292,9 @@ async function initDatabase() {
         abstract TEXT NULL,
         keywords TEXT NULL,
         study_design TEXT NULL,
-        participants JSON NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        participants JSONB NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // Seed ข้อมูลอาจารย์ UP ICT ถ้ายังไม่มี
@@ -300,24 +335,25 @@ async function initDatabase() {
         ]);
       }
     }
-    console.log(`✅ ข้อมูลบุคลากรคณะ ICT มหาวิทยาลัยพะเยา (${UP_ICT_FACULTY.length} ท่าน) พร้อมใช้งาน`);
+    console.log(`✅ ข้อมูลบุคลากรคณะ ICT มหาวิทยาลัยพะเยา (${UP_ICT_FACULTY.length} ท่าน) พร้อมใช้งานบน Supabase`);
 
     conn.release();
-    console.log('✅ ตรวจสอบและเตรียมโครงสร้างตาราง MySQL Database สำเร็จ');
+    console.log('✅ ตรวจสอบและเตรียมโครงสร้างตาราง Supabase (PostgreSQL) สำเร็จ');
   } catch (err) {
+    if (conn) conn.release();
     console.error('⚠️ ข้อผิดพลาดในการตรวจสอบตารางฐานข้อมูล:', err.message);
   }
 }
 
-pool.getConnection()
+// ทดสอบการเชื่อมต่อเมื่อเริ่มต้น
+db.getConnection()
   .then(conn => {
-    console.log('✅ เชื่อมต่อ MySQL Database สำเร็จ!');
+    console.log('✅ เชื่อมต่อ Supabase PostgreSQL Database สำเร็จ!');
     conn.release();
     initDatabase();
   })
   .catch(err => {
-    console.error('❌ ไม่สามารถเชื่อมต่อ MySQL ได้:', err.message);
-    console.error('💡 ตรวจสอบไฟล์ .env หรือเปิด MySQL Container ผ่าน docker compose up -d');
+    console.error('❌ ไม่สามารถเชื่อมต่อ Supabase ได้:', err.message);
   });
 
-module.exports = pool;
+module.exports = db;

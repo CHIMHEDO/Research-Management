@@ -31,7 +31,7 @@ import PdfUploadModal from "./components/PdfUploadModal";
 import api from "./api/client";
 import "./App.css";
 
-const API_URL = "http://localhost:5000/api";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const LOOKUP_TABLE = [
   { type: "การประชุมวิชาการระดับชาติ (สายสนับสนุน)", db: "ไม่มีฐานข้อมูล", code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
