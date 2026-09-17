@@ -1,0 +1,36 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Unified Research Workload Management and Analysis Backend",
+  "main": "server.js",
+  "scripts": {
+    "dev": "nodemon server.js",
+    "start": "node server.js",
+    "sync:scholar": "node -e \"require('./scholarService').syncAllUsersScholarData().then(r => {console.log(JSON.stringify(r, null, 2)); process.exit(0)}).catch(e => {console.error(e); process.exit(1)})\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.19.0",
+    "bcrypt": "^6.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.1",
+    "form-data": "^4.0.6",
+    "jsonwebtoken": "^9.0.3",
+    "minio": "^8.0.7",
+    "multer": "^2.2.0",
+    "mysql2": "^3.23.4",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^9.0.5",
+    "puppeteer": "^25.10.0",
+    "xml2js": "^0.6.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}
