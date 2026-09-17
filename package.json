@@ -1,0 +1,9 @@
+{
+  "name": "research-management",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "npm --prefix Project_ict_clean-main/my-react-app run build",
+    "install": "npm --prefix Project_ict_clean-main/my-react-app install"
+  }
+}

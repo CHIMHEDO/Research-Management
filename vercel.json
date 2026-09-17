@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "buildCommand": "npm --prefix Project_ict_clean-main/my-react-app run build",
+  "installCommand": "npm --prefix Project_ict_clean-main/my-react-app install",
+  "outputDirectory": "Project_ict_clean-main/my-react-app/dist",
+  "framework": "vite",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
