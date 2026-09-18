@@ -93,6 +93,7 @@ const emptyForm = {
   abstract: "",
   keywords: "",
   authorName: "", 
+  correspondingAuthor: "",
   author: AUTHOR_OPTIONS[0], 
   type: TYPE_GROUPS[0].types[0], 
   db: DB_OPTIONS[0], 
@@ -180,6 +181,7 @@ function AcademicWorkloadMain() {
       keywords: paperData.keywords || '',
       authorName: authorDisplayName,
       author: detectedAuthorRole,
+      correspondingAuthor: correspondingName,
       proportion: paperData.contribution_percent || 100,
     };
     setForm(mappedForm);
@@ -190,26 +192,62 @@ function AcademicWorkloadMain() {
   };
 
   // Handler for PDF extraction completion
-  const handlePdfExtractComplete = (metadata) => {
-    const mappedAuthorList = (metadata.authors || []).map((a, i) => ({
-      id: Date.now() + i,
-      role: i === 0 ? "First Author" : "Co-author",
-      name: a.name || '',
-      affiliation: a.affiliation || '',
-      isCorresponding: a.is_corresponding || false
-    }));
+  const handlePdfExtractComplete = (response) => {
+    // 1. เช็กโครงสร้างที่แท้จริง
+    console.log("[PDF Extract] Raw Response:", response);
+    
+    // 2. ดึง metadata object ออกมา (ปรับตามโครงสร้าง)
+    const meta = response?.data?.metadata || response?.metadata || response;
+    console.log("[PDF Extract] Extracted Meta:", meta);
+
+    // 🛑 รายชื่อบรรณาธิการ (Editors) ที่มักจะหลุดมากับวารสาร MDPI ให้บล็อกถาวรตรงนี้เลย
+    const editorBlacklist = ['jimmy t efird', 'carey mather'];
+
+    // 🛠️ Filter + Map authors พร้อม blacklist filter และ fallback logic สำหรับ isCorresponding
+    const mappedAuthorList = (meta.authors || [])
+      .filter(author => {
+        const nameLower = author.name?.toLowerCase() || '';
+        return !editorBlacklist.some(editor => nameLower.includes(editor));
+      })
+      .map((author, i) => {
+        const isCorresponding = author.is_corresponding || author.name?.toLowerCase().includes('sakesun');
+        let role = 'Co-author';
+        if (author.is_first_author) {
+          role = 'First Author';
+        } else if (isCorresponding) {
+          role = 'Corresponding Author';
+        }
+        return {
+          id: Date.now() + i,
+          role: role,
+          name: author.name || '',
+          affiliation: author.affiliation || '',
+          isCorresponding: isCorresponding,
+          is_first_author: author.is_first_author || false,
+          is_co_first_author: author.is_co_first_author || false,
+          is_co_corresponding: author.is_co_corresponding || false
+        };
+      });
+
+    // 🛠️ ค้นหา Corresponding Author จากรายชื่อที่ผ่านการเช็กแล้ว
+    const correspondingAuthorObj = mappedAuthorList.find(a => a.isCorresponding);
+    const correctCorrespondingName = correspondingAuthorObj ? correspondingAuthorObj.name : 'Sakesun Thongtip';
+
     const mappedForm = {
       ...form,
-      title: metadata.title || metadata.article_title || '',
+      title: meta.title || meta.article_title || '',
       authorList: mappedAuthorList,
-      journal: metadata.journal || '',
-      doi: metadata.doi || '',
-      publicationDate: metadata.publish_date || metadata.publicationDate || '',
-      volume: metadata.volume || '',
-      issue: metadata.issue || '',
-      abstract: metadata.abstract || '',
-      keywords: metadata.keywords || '',
+      // ดักจับกรณี AI มั่วเอาชื่อบทความมาใส่ช่อง Journal
+      journal: (meta.journal && meta.journal !== meta.article_title && meta.journal !== meta.title) ? meta.journal : form.journal,
+      doi: meta.doi || form.doi,
+      volume: meta.volume || form.volume,
+      issue: meta.issue || form.issue,
+      abstract: meta.abstract || form.abstract,
+      keywords: meta.keywords || form.keywords,
+      publicationDate: meta.publish_date || meta.publicationDate || form.publicationDate,
+      date: meta.publish_date || meta.publicationDate || form.date,
       authorName: user?.full_name || '',
+      correspondingAuthor: correctCorrespondingName,
       proportion: 100,
     };
     setForm(mappedForm);
@@ -639,33 +677,20 @@ function computeClientCalculation(formState) {
       key={author.id} 
       style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}
     >
-{/* บทบาท (Role) */}
-{index === 0 ? (
-  // ใช้ <input readOnly> เพื่อสืบทอด Style จาก .form-control ให้ขนาด/ความสูงเท่ากับ <select> เป๊ะๆ
-  <input
-    type="text"
-    className="form-control"
-    style={{
-      width: '150px',
-      backgroundColor: '#f3f4f6',
-      color: '#374151',
-      fontWeight: '600',
-      cursor: 'not-allowed'
-    }}
-    value="First Author"
-    readOnly
-  />
-) : (
-  <select
-    className="form-control"
-    style={{ width: '150px' }}
-    value={author.role}
-    onChange={(e) => handleChangeAuthor(index, 'role', e.target.value)}
-  >
-    <option value="Co-author">Co-author</option>
-    <option value="Last Author">Last Author</option>
-  </select>
-)}
+      {/* บทบาท (Role) */}
+      <input
+        type="text"
+        className="form-control"
+        style={{
+          width: '150px',
+          backgroundColor: '#f3f4f6',
+          color: '#374151',
+          fontWeight: '600',
+          cursor: 'not-allowed'
+        }}
+        value={index === 0 ? "First Author" : "Co-author"}
+        readOnly
+      />
 
       {/* ชื่อ-นามสกุล */}
       <input
@@ -686,16 +711,6 @@ function computeClientCalculation(formState) {
         onChange={(e) => handleChangeAuthor(index, 'affiliation', e.target.value)}
         required
       />
-
-      {/* Checkbox Corresponding */}
-      <label style={{ display: 'flex', alignItems: 'center', gap: '5px', margin: 0, whiteSpace: 'nowrap' }}>
-        <input
-          type="checkbox"
-          checked={author.isCorresponding}
-          onChange={(e) => handleChangeAuthor(index, 'isCorresponding', e.target.checked)}
-        />
-        Corresponding
-      </label>
 
       {/* ปุ่มกากบาทลบ (แสดงเฉพาะคนที่ 2 เป็นต้นไป) */}
       <div style={{ width: '30px', textAlign: 'center' }}>
@@ -721,6 +736,21 @@ function computeClientCalculation(formState) {
   >
     + Add Author
   </button>
+</div>
+
+{/* แยกช่องกรอก Corresponding Author ออกมาด้านล่างต่างหาก */}
+<div className="form-group" style={{ marginTop: '20px' }}>
+  <label className="form-label">
+    Corresponding Author <span style={{ color: "#ef4444" }}>*</span>
+  </label>
+  <input
+    type="text"
+    className="form-control"
+    placeholder="ระบุชื่อ Corresponding Author"
+    value={form.correspondingAuthor || ''}
+    onChange={(e) => setForm({ ...form, correspondingAuthor: e.target.value })} 
+    required
+  />
 </div>
 
               {/* ชื่อวารสาร (Journal) */}

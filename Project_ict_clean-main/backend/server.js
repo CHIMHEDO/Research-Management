@@ -414,6 +414,10 @@ app.post("/api/extract", upload.single("pdf"), async (req, res) => {
       ? xmlForLLM.substring(0, MAX_XML_LENGTH) + "\n\n[...truncated...]"
       : xmlForLLM;
 
+    console.log("[System] GROBID done. XML length:", xmlForLLM?.length || 0);
+    console.log("[System] GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "✓ มี" : "✗ ไม่พบ");
+    console.log("[System] truncatedXml:", truncatedXml ? "✓ มี (" + truncatedXml.length + " chars)" : "✗ ว่าง");
+
     if (truncatedXml && process.env.GEMINI_API_KEY) {
       console.log("[System] 2. ส่งเนื้อหาให้ Gemini ตรวจทานและแก้ไขข้อผิดพลาด...");
       try {
@@ -431,6 +435,7 @@ app.post("/api/extract", upload.single("pdf"), async (req, res) => {
           study_design: refined.study_design || "",
           participants: refined.participants || { description: "", sample_size: "" }
         };
+        console.log("[System] ✓ LLM Refine เสร็จ: title=" + (refined.article_title?.substring(0, 30) || '-') + ", journal=" + (refined.journal?.substring(0, 30) || '-') + ", doi=" + (refined.doi?.substring(0, 30) || '-'));
 
         // STAGE 2: Author Role Identification
         if (finalMetadata.authors && finalMetadata.authors.length > 0) {
@@ -447,6 +452,8 @@ app.post("/api/extract", upload.single("pdf"), async (req, res) => {
       } catch (err) {
         console.warn("[Warning] AI refinement error:", err.message);
       }
+    } else {
+      console.log("[System] ข้าม LLM! เหตุผล:", !truncatedXml ? "truncatedXml ว่าง" : "GEMINI_API_KEY ไม่พบ");
     }
 
     res.json({

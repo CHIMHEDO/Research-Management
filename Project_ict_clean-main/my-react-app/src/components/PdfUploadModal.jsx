@@ -120,6 +120,7 @@ export default function PdfUploadModal({ isOpen, onClose, onExtractComplete }) {
       await new Promise(resolve => setTimeout(resolve, 500));
 
       const extracted = res.data.metadata || res.data;
+      console.log("[PdfUploadModal] Extracted:", extracted);
       setMetadata(extracted);
       setStep('complete');
       setProgress(100);

@@ -1,6 +1,8 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
+console.log('[LLM] GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? "✓ โหลดแล้ว" : "✗ ยังไม่มี");
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const MODEL_PRIMARY = "gemini-2.5-flash";
@@ -284,7 +286,7 @@ ${textToSend}
     "journal": "",
     "publication_level": "",
     "authors": [
-        { "name": "ชื่อ-นามสกุล", "affiliation": "สังกัด", "is_first_author": false, "is_co_first_author": false, "is_corresponding": false, "is_co_corresponding": false }
+        { "name": "ชื่อ-นามสกุล", "affiliation": "สังกัด", "is_first_author": false, "is_co_first_author": false, "is_corresponding": "boolean. Set to true ONLY for the author whose name is directly associated with the 'Correspondence:' label or correspondence email address in the affiliation/footer section (e.g., 'Correspondence: email@up.ac.th'). Do not default to the first author.", "is_co_corresponding": false }
     ],
     "volume": "",
     "issue": "",
@@ -293,9 +295,35 @@ ${textToSend}
     "abstract": "",
     "study_design": "",
     "participants": { "description": "", "sample_size": "" },
-    "author_contribution": "ข้อความ หรือ null"
+    "author_contribution": "ข้อความ หรือ null",
+    "corresponding_author_name": "ชื่อเต็มของผู้แต่งที่มีเครื่องหมาย * หรืออีเมลระบุว่าเป็น Corresponding Author เช่น 'Uratcha Sadjapong'. หากไม่พบให้ใช้ \"\""
 }
-        `;
+
+⚠️ กฎเหล็ก: ต้องค้นหาชื่อของผู้ที่มีเครื่องหมาย * (asterisk) ✉ (envelope) หรือข้อความว่า "Correspondence:", "Corresponding author:" ใกล้ชื่อใน XML body text หรือ footnotes แล้วส่งชื่อเต็มนั้นลงในช่อง "corresponding_author_name" ห้ามพลาดฟิลด์นี้
+
+⚠️ กฎเหล็กสำหรับ is_corresponding: ตั้ง is_corresponding: true เฉพาะเมื่อมีหลักฐานชัดเจน (สัญลักษณ์ * ติดชื่อ, อีเมล corresp, ข้อความ Corresponding author) ห้ามเดา! ถ้าไม่เจอหลักฐานให้ตั้ง is_corresponding: false เท่านั้น
+
+⚠️ กฎเหล็ก: ต้องคืนค่าครบทุกฟิลด์ตามโครงสร้างด้านบน ห้ามข้ามหรือละเว้นฟิลด์ใดๆ หากข้อมูลไม่พบ ให้ใช้ "" หรือ null เท่านั้น ห้ามหายไปจาก JSON
+
+=== กฎเหล็กและขั้นตอนการสกัด Corresponding Author (Symbol-to-Footnote Mapping) ===
+คุณต้องทำตามขั้นตอนเหล่านี้ตามลำดับอย่างเคร่งครัด ห้ามข้ามขั้นตอนหรือคาดเดา:
+
+1. [Scan Symbols]: ตรวจสอบรายชื่อผู้แต่งทั้งหมดในฟิลด์ authors ว่ามีผู้แต่งคนใดที่มีเครื่องหมายสัญลักษณ์พิเศษติดอยู่หลังชื่อหรือไม่ (เช่น เครื่องหมายดอกจัน *, กากบาท (†, ‡) หรือตัวเลขยกกำลัง)
+2. [Find Footnote]: ค้นหาข้อความส่วนท้ายหน้าแรก หรือส่วนเชิงอรรถ (Footnote) ที่มีคำว่า "Correspondence:", "Corresponding author:" หรือระบุอีเมลติดต่อ และดูว่ามีสัญลักษณ์เดียวกันกำกับอยู่หรือไม่ (เช่น * Correspondence: email@domain.com)
+3. [Match & Extract]: จับคู่ชื่อผู้แต่งที่มีสัญลักษณ์นั้นตรงกับข้อความ Correspondence ในขั้นตอนที่ 2
+4. [Final Output Assignment]:
+   - บันทึกชื่อเต็มของผู้แต่งที่ตรงกันลงในฟิลด์ "corresponding_author_name"
+   - กำหนดค่า "is_corresponding: true" เฉพาะผู้แต่งคนนั้นเท่านั้น (ผู้แต่งคนอื่นให้เป็น false)
+    - [ข้อห้ามเด็ดขาด]: ห้ามตั้งค่า default ให้ผู้แต่งคนแรก (First Author) เป็น Corresponding Author เด็ดขาด หากคนแรกไม่มีสัญลักษณ์เครื่องหมาย * หรือเครื่องหมายที่ตรงกับข้อความ Correspondence กำกับไว้
+
+=== กฎเหล็กเพิ่มเติมสำหรับการสกัด Authors ===
+1. ให้สกัดเฉพาะรายชื่อผู้แต่งบทความ (Authors) ที่ปรากฏอยู่ใต้ชื่อเรื่อง (Title) เท่านั้น
+2. ห้ามดึงรายชื่อของ "Academic Editors", "Editors", "Reviewers" หรือบุคคลใดๆ ที่ระบุว่าเป็นผู้จัดการบทความ/บรรณาธิการ เข้ามาในอาเรย์ของ authors เด็ดขาด หากพบชื่อเหล่านี้ ให้ข้ามไปเลย ไม่ต้องนำมารวมใน authors
+3. กำหนด Role ของผู้แต่งให้ถูกต้องตามบริบท:
+   - First Author (ผู้แต่งชื่อแรกในลำดับ)
+   - Co-Author (ผู้แต่งร่วมที่เหลือ)
+   - Corresponding Author (ผู้แต่งที่มีสัญลักษณ์ * หรือข้อความ Correspondence)
+         `;
 
         const responseText = await callModelWithFallback(prompt, responseSchema);
         
@@ -380,6 +408,8 @@ ${authorListForPrompt}
 - <teiHeader> author[@corresp="yes"] attributes
 - CRediT / Author Contribution statements in <back>
 
+⚠️ กฎเหล็กสำหรับ is_corresponding: ตั้ง true เฉพาะเมื่อมีหลักฐานชัดเจน (เครื่องหมาย * ติดชื่อ, corresp="yes" ใน XML, อีเมลใน footnote, ข้อความ "Correspondence:") ห้ามเดา! ถ้าไม่เจอหลักฐานให้ตั้ง false
+
 คืนค่า JSON เท่านั้น ตามโครงสร้างนี้ (ห้ามมีข้อความเพิ่มเติม):
 {
   "authors": [
@@ -388,7 +418,7 @@ ${authorListForPrompt}
       "author_order": 1,
       "is_first_author": true/false,
       "is_co_first_author": true/false,
-      "is_corresponding": true/false,
+      "is_corresponding": "true/false. Set true ONLY if clear explicit indicator (asterisk *, ✉, email corresp, or word 'Correspondence' linked to this author). If unsure or no evidence found, set false. DO NOT GUESS.",
       "is_co_corresponding": true/false,
       "affiliation": "สังกัด"
     }
