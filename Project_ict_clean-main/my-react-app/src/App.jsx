@@ -82,9 +82,9 @@ const DB_OPTIONS = ["ไม่มีฐานข้อมูล", "TCI กลุ
 
 const emptyForm = { 
   title: "", 
-  authors: "",
-  affiliations: "",
-  correspondingAuthor: "",
+  authorList: [
+    { id: Date.now(), role: "First Author", name: "", affiliation: "", isCorresponding: false }
+  ],
   publicationDate: "",
   doi: "",
   journal: "",
@@ -117,6 +117,32 @@ function AcademicWorkloadMain() {
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState("ทั้งหมด");
   const [viewMode, setViewMode] = useState("card"); // "card" or "table"
 
+  // ฟังก์ชันจัดการ authorList
+  const handleAddAuthor = () => {
+    setForm(prev => ({
+      ...prev,
+      authorList: [
+        ...(prev.authorList || []),
+        { id: Date.now(), role: "Co-author", name: "", affiliation: "", isCorresponding: false }
+      ]
+    }));
+  };
+
+  const handleRemoveAuthor = (indexToRemove) => {
+    setForm(prev => ({
+      ...prev,
+      authorList: prev.authorList.filter((_, index) => index !== indexToRemove)
+    }));
+  };
+
+  const handleChangeAuthor = (index, field, value) => {
+    setForm(prev => {
+      const newList = [...(prev.authorList || [])];
+      newList[index] = { ...newList[index], [field]: value };
+      return { ...prev, authorList: newList };
+    });
+  };
+
   // Handler for importing paper data from Scholar Dashboard / Modal to Form
   const handleImportFromScholar = (paperData, userObj) => {
     const authorDisplayName = userObj?.name_th || userObj?.name_en || userObj?.full_name || user?.full_name || '';
@@ -131,10 +157,20 @@ function AcademicWorkloadMain() {
       detectedAuthorRole = "Co author";
     }
 
+    const authorRaw = paperData.authors_raw || paperData.authors || '';
+    const authorNames = authorRaw.split(',').map(a => a.trim()).filter(Boolean);
+    const correspondingName = paperData.corresponding_author || paperData.correspondingAuthor || '';
+    const mappedAuthorList = authorNames.map((name, i) => ({
+      id: Date.now() + i,
+      role: i === 0 ? "First Author" : "Co-author",
+      name: name,
+      affiliation: "",
+      isCorresponding: name === correspondingName
+    }));
     const mappedForm = {
       ...form,
       title: paperData.title || '',
-      authors: paperData.authors_raw || '',
+      authorList: mappedAuthorList,
       journal: paperData.journal || '',
       doi: paperData.doi || '',
       publicationDate: paperData.publish_year ? `${paperData.publish_year}-01-01` : (paperData.publicationDate || ''),
@@ -144,7 +180,6 @@ function AcademicWorkloadMain() {
       keywords: paperData.keywords || '',
       authorName: authorDisplayName,
       author: detectedAuthorRole,
-      correspondingAuthor: paperData.corresponding_author || '',
       proportion: paperData.contribution_percent || 100,
     };
     setForm(mappedForm);
@@ -156,10 +191,17 @@ function AcademicWorkloadMain() {
 
   // Handler for PDF extraction completion
   const handlePdfExtractComplete = (metadata) => {
+    const mappedAuthorList = (metadata.authors || []).map((a, i) => ({
+      id: Date.now() + i,
+      role: i === 0 ? "First Author" : "Co-author",
+      name: a.name || '',
+      affiliation: a.affiliation || '',
+      isCorresponding: a.is_corresponding || false
+    }));
     const mappedForm = {
       ...form,
       title: metadata.title || metadata.article_title || '',
-      authors: (metadata.authors || []).map(a => a.name).join(', '),
+      authorList: mappedAuthorList,
       journal: metadata.journal || '',
       doi: metadata.doi || '',
       publicationDate: metadata.publish_date || metadata.publicationDate || '',
@@ -168,14 +210,8 @@ function AcademicWorkloadMain() {
       abstract: metadata.abstract || '',
       keywords: metadata.keywords || '',
       authorName: user?.full_name || '',
-      correspondingAuthor: '', // Will be filled from authors if corresponding found
       proportion: 100,
     };
-    // Try to find corresponding author
-    const corresponding = (metadata.authors || []).find(a => a.is_corresponding);
-    if (corresponding) {
-      mappedForm.correspondingAuthor = corresponding.name;
-    }
     setForm(mappedForm);
     setTab('form');
   };
@@ -457,50 +493,101 @@ function AcademicWorkloadMain() {
                 />
               </div>
 
-              {/* ผู้แต่ง / ผู้เขียน (Authors) */}
-              <div className="form-group">
-                <label className="form-label">
-                  Authors (ผู้แต่ง / ผู้เขียน) <span style={{ color: "#ef4444" }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="เช่น Somchai J., Somying R., Kittisak P."
-                  value={form.authors || ""}
-                  onChange={e => setForm({ ...form, authors: e.target.value })}
-                  required
-                />
-              </div>
+{/* ผู้แต่ง และ สถาบัน (Authors & Affiliations) */}
+<div className="form-group">
+  <label className="form-label">
+    Authors & Affiliations (ผู้แต่งและหน่วยงาน) <span style={{ color: "#ef4444" }}>*</span>
+  </label>
 
-              {/* สถาบัน / หน่วยงานต้นสังกัดของผู้แต่ง (Affiliations) */}
-              <div className="form-group">
-                <label className="form-label">
-                  Affiliations (สถาบัน / หน่วยงานต้นสังกัดของผู้แต่ง) <span style={{ color: "#ef4444" }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="เช่น Faculty of ICT, Mahidol University"
-                  value={form.affiliations || ""}
-                  onChange={e => setForm({ ...form, affiliations: e.target.value })}
-                  required
-                />
-              </div>
+  {/* วนลูปแสดงรายการผู้แต่ง */}
+  {(form.authorList || []).map((author, index) => (
+    <div 
+      key={author.id} 
+      style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}
+    >
+{/* บทบาท (Role) */}
+{index === 0 ? (
+  // ใช้ <input readOnly> เพื่อสืบทอด Style จาก .form-control ให้ขนาด/ความสูงเท่ากับ <select> เป๊ะๆ
+  <input
+    type="text"
+    className="form-control"
+    style={{
+      width: '150px',
+      backgroundColor: '#f3f4f6',
+      color: '#374151',
+      fontWeight: '600',
+      cursor: 'not-allowed'
+    }}
+    value="First Author"
+    readOnly
+  />
+) : (
+  <select
+    className="form-control"
+    style={{ width: '150px' }}
+    value={author.role}
+    onChange={(e) => handleChangeAuthor(index, 'role', e.target.value)}
+  >
+    <option value="Co-author">Co-author</option>
+    <option value="Last Author">Last Author</option>
+  </select>
+)}
 
-              {/* ผู้แต่งที่ทำหน้าที่ติดต่อ / ผู้รับผิดชอบบทความ (Corresponding Author) */}
-              <div className="form-group">
-                <label className="form-label">
-                  Corresponding Author (ผู้แต่งที่ทำหน้าที่ติดต่อ / ผู้รับผิดชอบบทความ) <span style={{ color: "#ef4444" }}>*</span>
-                </label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="เช่น Somchai J. (somchai.j@ict.university.ac.th)"
-                  value={form.correspondingAuthor || ""}
-                  onChange={e => setForm({ ...form, correspondingAuthor: e.target.value })}
-                  required
-                />
-              </div>
+      {/* ชื่อ-นามสกุล */}
+      <input
+        type="text"
+        className="form-control"
+        placeholder="ชื่อ-นามสกุล (เช่น Somchai J.)"
+        value={author.name}
+        onChange={(e) => handleChangeAuthor(index, 'name', e.target.value)}
+        required
+      />
+
+      {/* สถาบัน */}
+      <input
+        type="text"
+        className="form-control"
+        placeholder="สถาบัน (เช่น Mahidol University)"
+        value={author.affiliation}
+        onChange={(e) => handleChangeAuthor(index, 'affiliation', e.target.value)}
+        required
+      />
+
+      {/* Checkbox Corresponding */}
+      <label style={{ display: 'flex', alignItems: 'center', gap: '5px', margin: 0, whiteSpace: 'nowrap' }}>
+        <input
+          type="checkbox"
+          checked={author.isCorresponding}
+          onChange={(e) => handleChangeAuthor(index, 'isCorresponding', e.target.checked)}
+        />
+        Corresponding
+      </label>
+
+      {/* ปุ่มกากบาทลบ (แสดงเฉพาะคนที่ 2 เป็นต้นไป) */}
+      <div style={{ width: '30px', textAlign: 'center' }}>
+        {index > 0 && (
+          <button
+            type="button"
+            onClick={() => handleRemoveAuthor(index)}
+            style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}
+            title="ลบผู้แต่ง"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+    </div>
+  ))}
+
+  {/* ปุ่มเพิ่มผู้แต่ง */}
+  <button
+    type="button"
+    onClick={handleAddAuthor}
+    style={{ marginTop: '10px', padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#f9fafb', cursor: 'pointer' }}
+  >
+    + Add Author
+  </button>
+</div>
 
               {/* ชื่อวารสาร (Journal) */}
               <div className="form-group">
