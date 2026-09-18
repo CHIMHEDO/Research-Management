@@ -80,8 +80,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const NO_DB = "ไม่มีฐานข้อมูล";
 
 const LOOKUP_TABLE = [
-  { type: "การประชุมวิชาการระดับชาติ (สายสนับสนุน)", db: NO_DB, code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
-  { type: "การประชุมวิชาการระดับชาติ (สายวิชาการ)", db: NO_DB, code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
+  { type: "การประชุมวิชาการระดับชาติ", db: NO_DB, code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
   { type: "การประชุมวิชาการระดับนานาชาติ", db: NO_DB, code: "2.1.5", hours: 40, quality: 0.4, faculty: 0, uni: 0 },
   { type: "วารสารระดับชาติ", db: NO_DB, code: "2.1.5", hours: 40, quality: 0.4, faculty: 0, uni: 0 },
   { type: "วารสารระดับชาติ", db: "TCI กลุ่ม 2", code: "2.1.6", hours: 80, quality: 0.6, faculty: 2500, uni: 0 },
@@ -102,10 +101,7 @@ const LOOKUP_TABLE = [
 ];
 
 function calculateFacultyFunding(type, author, baseFaculty) {
-  if (type === "การประชุมวิชาการระดับชาติ (สายสนับสนุน)") {
-    return author === "First author" ? 2500 : 0;
-  }
-  if (type === "การประชุมวิชาการระดับชาติ (สายวิชาการ)") {
+  if (type === "การประชุมวิชาการระดับชาติ") {
     if (author === "First author") return 1000;
     if (author === "Corresponding author") return 500;
     return 0;
@@ -245,6 +241,10 @@ app.post("/api/entries", async (req, res) => {
     } = req.body;
 
     const pubDate = publicationDate || date || null;
+
+    if (req.body.id) {
+      await pool.query("DELETE FROM entries WHERE id = ?", [req.body.id]);
+    }
 
     const sql = `
       INSERT INTO entries (
