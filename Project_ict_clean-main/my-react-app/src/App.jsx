@@ -330,10 +330,9 @@ function AcademicWorkloadMain() {
   }
 
   // หากยังไม่ได้เข้าสู่ระบบ แสดงหน้า Login
-// พักไว้จนกว่าจะแก้ไมโครซอฟท์ได้
-  if (!user) {
-    return <LoginPage />;
-  }   
+  // if (!user) {
+  //   return <LoginPage />;
+  // }   
 
 
   return (
