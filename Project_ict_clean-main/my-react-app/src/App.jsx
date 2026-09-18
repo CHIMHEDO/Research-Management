@@ -767,8 +767,9 @@ function AcademicWorkloadMain() {
                     <div className="purple-calendar-tags">
                       <span className="purple-calendar-chip">
                         <CalendarDays size={11} style={{ marginRight: 4, display: "inline" }} />
-                        {previewData.dateInfo.beLabel}
+                        {previewData.dateInfo.workloadLabel || `ปีภาระงาน ${previewData.dateInfo.acadLabel?.replace('ปีการศึกษา ', '') || ''}`}
                       </span>
+                      <span className="purple-calendar-chip">{previewData.dateInfo.beLabel}</span>
                       <span className="purple-calendar-chip">{previewData.dateInfo.acadLabel}</span>
                       <span className="purple-calendar-chip">{previewData.dateInfo.fiscalLabel}</span>
                     </div>
