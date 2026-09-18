@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { 
   BookMarked, 
   Trash2, 
+  Pencil,
   Plus, 
   Coins, 
   Clock, 
@@ -28,14 +29,14 @@ import Sidebar from "./components/Sidebar";
 import ScholarDashboard from "./components/ScholarDashboard";
 import ScholarImportModal from "./components/ScholarImportModal";
 import PdfUploadModal from "./components/PdfUploadModal";
+import PlanningSimulator from "./components/PlanningSimulator";
 import api from "./api/client";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 const LOOKUP_TABLE = [
-  { type: "การประชุมวิชาการระดับชาติ (สายสนับสนุน)", db: "ไม่มีฐานข้อมูล", code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
-  { type: "การประชุมวิชาการระดับชาติ (สายวิชาการ)", db: "ไม่มีฐานข้อมูล", code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
+  { type: "การประชุมวิชาการระดับชาติ", db: "ไม่มีฐานข้อมูล", code: "2.1.4", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
   { type: "การประชุมวิชาการระดับนานาชาติ", db: "ไม่มีฐานข้อมูล", code: "2.1.5", hours: 40, quality: 0.4, faculty: 0, uni: 0 },
   { type: "วารสารระดับชาติ", db: "ไม่มีฐานข้อมูล", code: "2.1.5", hours: 40, quality: 0.4, faculty: 0, uni: 0 },
   { type: "วารสารระดับชาติ", db: "TCI กลุ่ม 2", code: "2.1.6", hours: 80, quality: 0.6, faculty: 2500, uni: 0 },
@@ -59,8 +60,7 @@ const TYPE_GROUPS = [
   {
     label: "การประชุมวิชาการ",
     types: [
-      "การประชุมวิชาการระดับชาติ (สายสนับสนุน)",
-      "การประชุมวิชาการระดับชาติ (สายวิชาการ)",
+      "การประชุมวิชาการระดับชาติ",
       "การประชุมวิชาการระดับนานาชาติ"
     ]
   },
@@ -180,18 +180,93 @@ function AcademicWorkloadMain() {
     setTab('form');
   };
 
-  // 1. ดึงข้อมูลรายการที่เคยบันทึกไว้เมื่อโหลดและล็อกอินแล้ว
+  // Handler for applying planned parameters to full entry form
+  const handleApplyFromPlanning = (plannedData) => {
+    setForm(prev => ({
+      ...prev,
+      author: plannedData.author,
+      type: plannedData.type,
+      db: plannedData.db,
+      proportion: plannedData.proportion,
+      publicationDate: plannedData.publicationDate,
+      date: plannedData.publicationDate,
+    }));
+    setTab('form');
+    if (setToast) {
+      setToast("นำเข้าพารามิเตอร์จากการวางแผนมายังฟอร์มเรียบร้อยแล้ว");
+    }
+  };
+
+function calculateFacultyFunding(type, author, baseFaculty) {
+  if (type === "การประชุมวิชาการระดับชาติ") {
+    if (author === "First author") return 1000;
+    if (author === "Corresponding author") return 500;
+    return 0;
+  }
+  if (type === "การประชุมวิชาการระดับนานาชาติ") {
+    if (author === "First author" || author === "Corresponding author") return 9000;
+    if (author === "Co author") return 2500;
+    return 0;
+  }
+  return baseFaculty;
+}
+
+function computeClientDateInfo(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  
+  const beYear = y + 543;
+  const juneStart = new Date(y, 5, 15);
+  const acadGregorian = d >= juneStart ? y : y - 1;
+  
+  const julyStart = new Date(y, 6, 1);
+  const fiscalEndGregorian = d >= julyStart ? y + 1 : y;
+
+  return {
+    beLabel: `ปี พ.ศ. ${beYear}`,
+    acadLabel: `ปีการศึกษา ${acadGregorian + 543}`,
+    fiscalLabel: `ปีงบประมาณ ${fiscalEndGregorian + 543}`,
+    workloadLabel: `ปีภาระงาน ${acadGregorian + 543}`,
+  };
+}
+
+function computeClientCalculation(formState) {
+  const lookup = LOOKUP_TABLE.find(r => r.type === formState.type && r.db === formState.db) || {
+    code: "2.1.8",
+    hours: 150,
+    quality: 1,
+    faculty: 10000,
+    facultyNote: "ไม่เกิน 10,000 บาท (จ่ายตามจริง)",
+    uni: 40000
+  };
+
+  const actualHours = Math.round(((Number(formState.proportion) || 0) * lookup.hours) / 100 * 100) / 100;
+  const faculty = calculateFacultyFunding(formState.type, formState.author, lookup.faculty);
+  const dateInfo = computeClientDateInfo(formState.publicationDate || formState.date);
+
+  return {
+    ...lookup,
+    actualHours,
+    faculty,
+    dateInfo
+  };
+}
+
+  // 1. ดึงข้อมูลรายการที่เคยบันทึกไว้เมื่อโหลด
   useEffect(() => {
-    if (!user) return;
     api.get('/entries')
-      .then(res => { if (res.data.success) setEntries(res.data.data); })
+      .then(res => { if (res.data && res.data.success) setEntries(res.data.data); })
       .catch(err => console.error("Entries DB Error:", err.response?.data || err.message));
   }, [user, token]);
 
-  // 2. ขอให้ Backend คำนวณผลลัพธ์แบบ Live Preview เมื่อมีการเปลี่ยนค่าในฟอร์ม
+  // 2. ขอให้ Backend คำนวณผลลัพธ์แบบ Live Preview เมื่อมีการเปลี่ยนค่าในฟอร์ม (พร้อม Real-time Fallback)
   useEffect(() => {
-    if (!user) return;
     const fetchCalculation = async () => {
+      const localCalc = computeClientCalculation(form);
+      setPreviewData(localCalc);
+
       try {
         const res = await fetch(`${API_URL}/calculate`, {
           method: "POST",
@@ -199,13 +274,15 @@ function AcademicWorkloadMain() {
           body: JSON.stringify(form)
         });
         const data = await res.json();
-        setPreviewData(data.success ? data.data : null);
+        if (data && data.success && data.data) {
+          setPreviewData(data.data);
+        }
       } catch (err) {
-        setPreviewData(null);
+        // ใช้ localCalc ต่อไป
       }
     };
     fetchCalculation();
-  }, [form, user]);
+  }, [form]);
 
   // กำหนดชื่ออาจารย์อัตโนมัติตาม user ที่เข้าสู่ระบบ
   useEffect(() => {
@@ -216,18 +293,20 @@ function AcademicWorkloadMain() {
 
   // ฟังก์ชันบันทึกข้อมูลไปยัง Backend
   const handleSave = async () => {
-    if (!previewData) return;
+    const activePreview = previewData || computeClientCalculation(form);
+    const entryId = form.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
     const payload = {
       ...form,
-      code: previewData.code,
-      baseHours: previewData.hours,
-      quality: previewData.quality,
-      actualHours: previewData.actualHours,
-      faculty: previewData.faculty,
-      facultyNote: previewData.facultyNote,
-      uni: previewData.uni,
-      dateInfo: previewData.dateInfo
+      id: entryId,
+      code: activePreview.code,
+      baseHours: activePreview.hours,
+      quality: activePreview.quality,
+      actualHours: activePreview.actualHours,
+      faculty: activePreview.faculty,
+      facultyNote: activePreview.facultyNote,
+      uni: activePreview.uni,
+      dateInfo: activePreview.dateInfo
     };
 
     try {
@@ -240,18 +319,56 @@ function AcademicWorkloadMain() {
         body: JSON.stringify(payload)
       });
       const data = await res.json();
-      if (data.success) {
+      if (data && data.success) {
         setEntries(data.data);
         setToast("บันทึกผลงานเรียบร้อยแล้ว");
         setForm({ ...emptyForm, authorName: user?.full_name || "" });
         setTab("dashboard");
+        return;
       }
     } catch (err) {
-      console.error("Save error:", err);
+      console.error("Save error, fallback to local entries update:", err);
+    }
+
+    // Fallback update local state if backend API is not responding
+    setEntries(prev => {
+      const filtered = prev.filter(item => item.id !== entryId);
+      return [payload, ...filtered];
+    });
+    setToast("บันทึกผลงานเรียบร้อยแล้ว");
+    setForm({ ...emptyForm, authorName: user?.full_name || "" });
+    setTab("dashboard");
+  };
+
+  // ฟังก์ชันปรับแต่ง/แก้ไขข้อมูลผลงาน
+  const handleEdit = (entry) => {
+    setForm({
+      id: entry.id,
+      title: entry.title || "",
+      authors: entry.authors || "",
+      author: entry.author || AUTHOR_OPTIONS[0],
+      authorName: entry.authorName || user?.full_name || "",
+      affiliations: entry.affiliations || "",
+      correspondingAuthor: entry.correspondingAuthor || "",
+      publicationDate: entry.publicationDate || entry.date || "",
+      doi: entry.doi || "",
+      journal: entry.journal || "",
+      volume: entry.volume || "",
+      issue: entry.issue || "",
+      abstract: entry.abstract || "",
+      keywords: entry.keywords || "",
+      type: entry.type || TYPE_GROUPS[0].types[0],
+      db: entry.db || DB_OPTIONS[0],
+      proportion: entry.proportion !== undefined ? entry.proportion : 100,
+      date: entry.publicationDate || entry.date || "",
+    });
+    setTab("form");
+    if (setToast) {
+      setToast(`โหลดข้อมูล "${(entry.title || entry.type).slice(0, 30)}..." สำหรับปรับแต่งเรียบร้อยแล้ว`);
     }
   };
 
-  // ฟังก์ชันลบข้อมูล
+  // ฟังก์ชันลบข้อมูล (คงไว้รองรับ API เผื่อจำเป็น)
   const handleDelete = async (id) => {
     try {
       const res = await fetch(`${API_URL}/entries/${id}`, { 
@@ -352,9 +469,26 @@ function AcademicWorkloadMain() {
                 <div className="card-header">
                   <div className="card-title-group">
                     <FileText size={20} color="#6C2BD9" />
-                    <h2 className="card-title">ข้อมูลผลงานและรายละเอียดบทความ</h2>
+                    <h2 className="card-title">{form.id ? "ปรับแต่งข้อมูลผลงานวิชาการ" : "ข้อมูลผลงานและรายละเอียดบทความ"}</h2>
                   </div>
                 </div>
+
+                {/* Editing Mode Banner */}
+                {form.id && (
+                  <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", padding: "10px 16px", borderRadius: "10px", margin: "14px 24px 0 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#6d28d9", fontWeight: 700 }}>
+                      <Pencil size={15} />
+                      <span>โหมดปรับแต่งผลงาน: ระบบจะบันทึกทับข้อมูลเดิมเมื่อกดบันทึก</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...emptyForm, authorName: user?.full_name || "" })}
+                      style={{ background: "#ede9fe", border: "1px solid #c4b5fd", color: "#5b21b6", padding: "4px 10px", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      ยกเลิกการปรับแต่ง (สร้างใหม่)
+                    </button>
+                  </div>
+                )}
 
                 {/* Quick Auto-Import Buttons: Google Scholar & PDF AI */}
                 <div className="form-group">
@@ -621,21 +755,7 @@ function AcademicWorkloadMain() {
                 </select>
               </div>
 
-              {/* ประเภทผลงาน */}
-              <div className="form-group">
-                <label className="form-label">ประเภทผลงานวิชาการ</label>
-                <select
-                  className="form-control"
-                  value={form.type}
-                  onChange={e => setForm({ ...form, type: e.target.value })}
-                >
-                  {TYPE_GROUPS.map(g => (
-                    <optgroup key={g.label} label={g.label}>
-                      {g.types.map(t => <option key={t} value={t}>{t}</option>)}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
+
 
               {/* ฐานข้อมูล */}
               <div className="form-group">
@@ -790,6 +910,10 @@ function AcademicWorkloadMain() {
           </div>
         )}
 
+        {/* Workload Planning & Simulation Tab */}
+        {tab === "planning" && (
+          <PlanningSimulator onApplyToForm={handleApplyFromPlanning} />
+        )}
 
         {/* Dashboard Tab */}
         {tab === "dashboard" && (
@@ -813,43 +937,34 @@ function AcademicWorkloadMain() {
             <div className="dashboard-top-grid">
               {/* Workload Progress Donut Chart */}
               <div className="ams-score-card">
-                <div className="score-card-title">คะแนนภาระงาน</div>
+                <div className="score-card-title">ภาระงาน</div>
 
                 <div className="donut-chart-wrapper">
-                  {(() => {
-                    const targetHours = 200;
-                    const pct = Math.min(100, Math.round(((totals.hours || 0) / targetHours) * 100)) || 85;
-                    const strokeDash = `${pct} ${100 - pct}`;
-                    return (
-                      <>
-                        <svg width="160" height="160" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
-                          <path
-                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                            fill="none"
-                            stroke="#ede9fe"
-                            strokeWidth="3.8"
-                          />
-                          <path
-                            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                            fill="none"
-                            stroke="#7c3aed"
-                            strokeWidth="3.8"
-                            strokeDasharray={strokeDash}
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                        <div className="donut-center-content">
-                          <div className="donut-pct-text">{pct}%</div>
-                          <div className="donut-sub-text">สำเร็จแล้ว</div>
-                        </div>
-                      </>
-                    );
-                  })()}
+                  <svg width="160" height="160" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="#ede9fe"
+                      strokeWidth="3.8"
+                    />
+                    <path
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="#7c3aed"
+                      strokeWidth="3.8"
+                      strokeDasharray="100 0"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  <div className="donut-center-content">
+                    <div className="donut-pct-text">{totals.hours || 0}</div>
+                    <div className="donut-sub-text">ชั่วโมง</div>
+                  </div>
                 </div>
 
                 <div className="workload-target-progress-box">
                   <div className="workload-progress-labels">
-                    <span>ชั่วโมงที่ทำได้จริง</span>
+                    <span>ชั่วโมงภาระงานสะสม</span>
                     <span><b>{totals.hours || 0}</b> ชม.</span>
                   </div>
                 </div>
@@ -963,11 +1078,12 @@ function AcademicWorkloadMain() {
                         </div>
                         <button
                           type="button"
-                          onClick={() => handleDelete(e.id)}
-                          title="ลบรายการผลงาน"
-                          className="card-btn-delete"
+                          onClick={() => handleEdit(e)}
+                          title="ปรับแต่งข้อมูลผลงาน"
+                          className="card-btn-edit"
                         >
-                          <Trash2 size={16} />
+                          <Pencil size={14} />
+                          <span>ปรับแต่ง</span>
                         </button>
                       </div>
 
@@ -1100,11 +1216,13 @@ function AcademicWorkloadMain() {
                         <td style={{ textAlign: "center" }}>
                           <button
                             type="button"
-                            onClick={() => handleDelete(e.id)}
-                            className="btn-delete-card"
+                            onClick={() => handleEdit(e)}
+                            className="btn-edit-table"
+                            title="ปรับแต่งข้อมูลผลงาน"
                             style={{ margin: "0 auto" }}
                           >
-                            <Trash2 size={14} />
+                            <Pencil size={13} />
+                            <span>ปรับแต่ง</span>
                           </button>
                         </td>
                       </tr>

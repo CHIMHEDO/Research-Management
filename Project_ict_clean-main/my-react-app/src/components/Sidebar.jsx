@@ -3,6 +3,7 @@ import {
   Plus,
   LayoutDashboard, 
   BookMarked, 
+  Target,
   DollarSign, 
   Settings, 
   LogOut,
@@ -50,6 +51,15 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
         >
           <BookMarked size={18} />
           <span>ผลงานวิชาการ (คำนวณ)</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setTab('planning')}
+          className={`sidebar-menu-btn ${tab === 'planning' ? 'active' : ''}`}
+        >
+          <Target size={18} />
+          <span>วางแผนภาระงาน</span>
         </button>
 
         <button
