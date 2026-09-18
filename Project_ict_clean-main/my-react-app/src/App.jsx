@@ -521,9 +521,9 @@ function computeClientCalculation(formState) {
   }
 
   // หากยังไม่ได้เข้าสู่ระบบ แสดงหน้า Login
-  // if (!user) {
-  //   return <LoginPage />;
-  // }   
+  if (!user) {
+    return <LoginPage />;
+  }   
 
 
   return (
