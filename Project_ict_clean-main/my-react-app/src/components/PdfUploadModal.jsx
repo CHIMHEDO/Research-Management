@@ -7,7 +7,6 @@ import {
   X, 
   ChevronRight,
   Brain,
-  Database,
   Zap,
   Eye,
   Download
@@ -16,7 +15,6 @@ import api from '../api/client';
 
 const STEPS = [
   { id: 'upload', label: 'อัปโหลดไฟล์', icon: FileText },
-  { id: 'grobid', label: 'GROBID สกัด XML', icon: Database },
   { id: 'gemini', label: 'Gemini AI วิเคราะห์', icon: Brain },
   { id: 'complete', label: 'เสร็จสิ้น', icon: CheckCircle2 }
 ];
@@ -95,14 +93,13 @@ export default function PdfUploadModal({ isOpen, onClose, onExtractComplete }) {
     }
 
     setError(null);
-    setStep('grobid');
+    setStep('gemini');
     setProgress(10);
 
     const formData = new FormData();
     formData.append('pdf', file);
 
     try {
-      // Step 1: Upload & GROBID
       setProgress(30);
       const res = await api.post('/extract', formData, {
         timeout: 120000,
@@ -112,11 +109,8 @@ export default function PdfUploadModal({ isOpen, onClose, onExtractComplete }) {
         }
       });
 
-      // Step 2: Gemini processing (already done in backend)
-      setStep('gemini');
       setProgress(80);
 
-      // Small delay to show Gemini step
       await new Promise(resolve => setTimeout(resolve, 500));
 
       const extracted = res.data.metadata || res.data;
@@ -125,7 +119,6 @@ export default function PdfUploadModal({ isOpen, onClose, onExtractComplete }) {
       setStep('complete');
       setProgress(100);
 
-      // Wait a bit then call completion callback
       setTimeout(() => {
         if (onExtractComplete) {
           onExtractComplete(extracted);
@@ -231,23 +224,13 @@ export default function PdfUploadModal({ isOpen, onClose, onExtractComplete }) {
             </div>
           )}
 
-          {step === 'grobid' && (
-            <div className="processing-step">
-              <div className="processing-animation">
-                <Database size={48} color="#3B82F6" className="pulse" />
-              </div>
-              <h3>กำลังส่งไฟล์ให้ GROBID ประมวลผล...</h3>
-              <p className="processing-desc">ระบบกำลังแปลง PDF เป็น XML TEI และสกัดข้อมูลเมตาพื้นฐาน</p>
-            </div>
-          )}
-
           {step === 'gemini' && (
             <div className="processing-step">
               <div className="processing-animation">
                 <Brain size={48} color="#F59E0B" className="pulse" />
               </div>
-              <h3>Gemini AI กำลังวิเคราะห์และขัดเกลาข้อมูล...</h3>
-              <p className="processing-desc">ระบบกำลังตรวจสอบชื่อบทความ ผู้แต่ง DOI วารสาร และระบุบทบาทผู้แต่ง (First Author / Corresponding Author)</p>
+              <h3>Gemini AI กำลังวิเคราะห์และสกัดข้อมูลจาก PDF...</h3>
+              <p className="processing-desc">ระบบกำลังอ่านเอกสาร PDF และสกัดข้อมูลชื่อบทความ ผู้แต่ง DOI วารสาร และระบุบทบาทผู้แต่ง (First Author / Corresponding Author)</p>
             </div>
           )}
 

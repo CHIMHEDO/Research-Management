@@ -1,13 +1,10 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
-const Minio = require("minio");
 const fs = require("fs");
-const path = require("path");
 const pool = require("./db");
 const authRoutes = require("./authRoutes");
-const { extractMetadataFromGrobid } = require("./grobidService");
-const { refineMetadataWithLLM, identifyAuthorRoles } = require("./llmService");
+const { extractMetadataWithGemini } = require("./llmService");
 const {
   syncAllUsersScholarData,
   syncUserScholarData,
@@ -22,8 +19,8 @@ require("dotenv").config();
 
 const app = express();
 
-// ตรวจสอบและสร้างไดเรกทอรี uploads/ ในเครื่องเสมอ สำหรับกรณี Graceful Fallback หาก MinIO ไม่ได้เปิด
-const UPLOADS_DIR = path.join(__dirname, "uploads");
+// ตรวจสอบและสร้างไดเรกทอรี uploads/ ในเครื่องเสมอ
+const UPLOADS_DIR = __dirname + "/uploads";
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 app.use(cors());
@@ -34,42 +31,6 @@ app.use("/api/auth", authRoutes);
 
 // In-memory lock ป้องกันการซิงก์ Google Scholar ซ้อนกัน
 let isSyncRunning = false;
-
-/* ==========================================
-   MinIO Client & Graceful Local Storage Fallback
-   ========================================== */
-let minioClient = null;
-let useMinio = false;
-const bucketName = process.env.MINIO_BUCKET || "research-papers";
-
-if (process.env.MINIO_ENDPOINT) {
-  try {
-    minioClient = new Minio.Client({
-      endPoint: process.env.MINIO_ENDPOINT,
-      port: parseInt(process.env.MINIO_PORT || "9000", 10),
-      useSSL: false,
-      accessKey: process.env.MINIO_ACCESS_KEY || "admin_minio",
-      secretKey: process.env.MINIO_SECRET_KEY || "minio_password123",
-    });
-
-    minioClient.bucketExists(bucketName)
-      .then((exists) => {
-        if (!exists) {
-          return minioClient.makeBucket(bucketName, "us-east-1");
-        }
-      })
-      .then(() => {
-        useMinio = true;
-        console.log(`[MinIO] Bucket '${bucketName}' พร้อมใช้งาน`);
-      })
-      .catch((err) => {
-        console.warn(`[MinIO Warning] ไม่สามารถเชื่อมต่อ MinIO ได้ (${err.message}) -> สลับไปบันทึกไฟล์ในโฟลเดอร์ uploads/ อัตโนมัติ`);
-        useMinio = false;
-      });
-  } catch (err) {
-    console.warn(`[MinIO Init Error] สลับไปใช้ Local Storage ใน uploads/`);
-  }
-}
 
 // Multer memory storage สำหรับรับไฟล์เข้า RAM ก่อนส่งต่อไป MinIO หรือเขียนลง Disk
 const upload = multer({ storage: multer.memoryStorage() });
@@ -307,77 +268,26 @@ app.delete("/api/entries/:id", async (req, res) => {
 });
 
 /* ==========================================
-   2. Endpoints สกัดข้อมูลจาก PDF (GROBID + Gemini AI)
+   2. Endpoints สกัดข้อมูลจาก PDF (Gemini AI Only - GROBID Removed)
    ========================================== */
 
-// 2.1 API สำหรับรับไฟล์ PDF พร้อมบันทึกขึ้น Storage และสกัด Metadata
+// 2.1 API สำหรับรับไฟล์ PDF และสกัด Metadata โดยตรงผ่าน Gemini
 app.post("/api/upload", upload.single("pdf_file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "ไม่พบไฟล์ที่อัปโหลด" });
   }
 
-  const fileName = `${Date.now()}-${req.file.originalname.replace(/\s+/g, "_")}`;
-
   try {
-    // บันทึกไฟล์ขึ้น MinIO หรือบันทึกลง Local Disk หาก MinIO ไม่ทำงาน
-    if (useMinio && minioClient) {
-      try {
-        await minioClient.putObject(
-          bucketName,
-          fileName,
-          req.file.buffer,
-          req.file.size,
-          { "Content-Type": req.file.mimetype }
-        );
-        console.log(`[MinIO] อัปโหลดไฟล์ ${fileName} สำเร็จ`);
-      } catch (minioErr) {
-        console.warn(`[MinIO Upload Warning] บันทึกลง Disk สำรองแทน: ${minioErr.message}`);
-        fs.writeFileSync(path.join(UPLOADS_DIR, fileName), req.file.buffer);
-      }
-    } else {
-      fs.writeFileSync(path.join(UPLOADS_DIR, fileName), req.file.buffer);
-      console.log(`[Storage] บันทึกไฟล์ลง Local Disk ${fileName} สำเร็จ`);
-    }
-
-    // ส่งไฟล์เข้า GROBID สกัด Metadata
-    console.log("[System] 1. กำลังส่งไฟล์ให้ GROBID ประมวลผล...");
-    let grobidData = { article_title: null, publish_date: null, authors: [], raw_xml: null };
-    try {
-      grobidData = await extractMetadataFromGrobid(req.file.buffer);
-    } catch (grobidError) {
-      console.warn("[Warning] ดึงข้อมูลจาก GROBID ไม่สำเร็จ จะใช้การอนุมานพื้นฐาน");
-    }
-
-    // ส่งข้อมูลให้ Gemini ตรวจทานและขัดเกลา
-    let finalMetadata = {
-      article_title: grobidData.article_title,
-      publish_date: grobidData.publish_date,
-      authors: grobidData.authors,
-      author_contribution: null
-    };
-
-    const xmlForLLM = grobidData.cleaned_xml || grobidData.raw_xml;
-    if (xmlForLLM && process.env.GEMINI_API_KEY) {
-      console.log("[System] 2. ส่งให้ Gemini AI ขัดเกลาและจำแนก Author Role...");
-      try {
-        const refined = await refineMetadataWithLLM(xmlForLLM, grobidData);
-        finalMetadata = { ...finalMetadata, ...refined };
-      } catch (llmErr) {
-        console.warn("[Warning] Gemini refinement ขัดข้อง:", llmErr.message);
-      }
-    }
+    console.log("[System] กำลังส่งไฟล์ PDF ให้ Gemini สกัด Metadata...");
+    const metadata = await extractMetadataWithGemini(req.file.buffer);
 
     res.json({
-      message: "อัปโหลดและประมวลผลไฟล์สำเร็จ",
-      file_info: {
-        fileName: fileName,
-        bucket: useMinio ? bucketName : "local_uploads"
-      },
-      metadata: finalMetadata
+      message: "สกัดข้อมูลสำเร็จ",
+      metadata: metadata
     });
   } catch (error) {
-    console.error("Upload error:", error);
-    res.status(500).json({ error: "อัปโหลดหรือประมวลผลไฟล์ไม่สำเร็จ: " + error.message });
+    console.error("Extract error:", error);
+    res.status(500).json({ error: "สกัดข้อมูลไม่สำเร็จ: " + error.message });
   }
 });
 
@@ -388,78 +298,13 @@ app.post("/api/extract", upload.single("pdf"), async (req, res) => {
   }
 
   try {
-    console.log("[System] 1. ส่งไฟล์ PDF ให้ GROBID ประมวลผล...");
-    let grobidData = { article_title: null, publish_date: null, authors: [], raw_xml: null };
-    try {
-      grobidData = await extractMetadataFromGrobid(req.file.buffer);
-    } catch (grobidError) {
-      console.warn("[Warning] ดึงข้อมูลจาก GROBID ไม่สำเร็จ:", grobidError.message);
-    }
-
-    let finalMetadata = {
-      title: grobidData.article_title || "",
-      publish_date: grobidData.publish_date || "",
-      authors: grobidData.authors || [],
-      volume: grobidData.volume || "",
-      issue: grobidData.issue || "",
-      abstract: grobidData.abstract || "",
-      keywords: grobidData.keywords || "",
-      journal: grobidData.journal || "",
-      doi: grobidData.doi || ""
-    };
-
-    const xmlForLLM = grobidData.cleaned_xml || grobidData.raw_xml;
-    const MAX_XML_LENGTH = 15000;
-    const truncatedXml = xmlForLLM && xmlForLLM.length > MAX_XML_LENGTH
-      ? xmlForLLM.substring(0, MAX_XML_LENGTH) + "\n\n[...truncated...]"
-      : xmlForLLM;
-
-    console.log("[System] GROBID done. XML length:", xmlForLLM?.length || 0);
-    console.log("[System] GEMINI_API_KEY:", process.env.GEMINI_API_KEY ? "✓ มี" : "✗ ไม่พบ");
-    console.log("[System] truncatedXml:", truncatedXml ? "✓ มี (" + truncatedXml.length + " chars)" : "✗ ว่าง");
-
-    if (truncatedXml && process.env.GEMINI_API_KEY) {
-      console.log("[System] 2. ส่งเนื้อหาให้ Gemini ตรวจทานและแก้ไขข้อผิดพลาด...");
-      try {
-        const refined = await refineMetadataWithLLM(truncatedXml, grobidData);
-        finalMetadata = {
-          title: refined.article_title || finalMetadata.title,
-          publish_date: refined.publish_date || finalMetadata.publish_date,
-          authors: refined.authors && refined.authors.length > 0 ? refined.authors : finalMetadata.authors,
-          volume: refined.volume || finalMetadata.volume,
-          issue: refined.issue || finalMetadata.issue,
-          abstract: refined.abstract || finalMetadata.abstract,
-          keywords: refined.keywords || finalMetadata.keywords,
-          journal: refined.journal || finalMetadata.journal,
-          doi: refined.doi || finalMetadata.doi,
-          study_design: refined.study_design || "",
-          participants: refined.participants || { description: "", sample_size: "" }
-        };
-        console.log("[System] ✓ LLM Refine เสร็จ: title=" + (refined.article_title?.substring(0, 30) || '-') + ", journal=" + (refined.journal?.substring(0, 30) || '-') + ", doi=" + (refined.doi?.substring(0, 30) || '-'));
-
-        // STAGE 2: Author Role Identification
-        if (finalMetadata.authors && finalMetadata.authors.length > 0) {
-          console.log("[System] 3. วิเคราะห์บทบาทผู้แต่งด้วย AI (First/Corresponding/Co-author)...");
-          try {
-            const roleResult = await identifyAuthorRoles(truncatedXml, finalMetadata.authors);
-            if (roleResult && roleResult.authors) {
-              finalMetadata.authors = roleResult.authors;
-            }
-          } catch (roleErr) {
-            console.warn("[Warning] ระบุบทบาทผู้แต่งล้มเหลว:", roleErr.message);
-          }
-        }
-      } catch (err) {
-        console.warn("[Warning] AI refinement error:", err.message);
-      }
-    } else {
-      console.log("[System] ข้าม LLM! เหตุผล:", !truncatedXml ? "truncatedXml ว่าง" : "GEMINI_API_KEY ไม่พบ");
-    }
+    console.log("[System] กำลังส่งไฟล์ PDF ให้ Gemini สกัด Metadata...");
+    const metadata = await extractMetadataWithGemini(req.file.buffer);
 
     res.json({
       success: true,
       message: "สกัดข้อมูลสำเร็จ",
-      metadata: finalMetadata
+      metadata: metadata
     });
   } catch (error) {
     console.error("Extract error:", error);

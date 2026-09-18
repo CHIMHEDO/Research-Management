@@ -5,8 +5,8 @@ console.log('[LLM] GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? "✓ โหล
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const MODEL_PRIMARY = "gemini-2.5-flash";
-const MODEL_FALLBACK = "gemini-2.0-flash";
+const MODEL_PRIMARY = "gemini-3.6-flash";
+const MODEL_FALLBACK = "gemini-1.5-pro";
 
 async function callModelWithFallback(prompt, responseSchema = null) {
     const models = [MODEL_PRIMARY, MODEL_FALLBACK];
@@ -46,6 +46,121 @@ async function callModelWithFallback(prompt, responseSchema = null) {
                 throw error;
             }
         }
+    }
+}
+
+/**
+ * Extract metadata directly from PDF using Gemini multimodal API (GROBID removed)
+ * @param {Buffer} pdfBuffer - Raw PDF file buffer
+ * @returns {Object} Extracted metadata
+ */
+async function extractMetadataWithGemini(pdfBuffer) {
+    if (!pdfBuffer || !(pdfBuffer instanceof Buffer)) {
+        throw new Error("PDF buffer is required and must be a Buffer");
+    }
+
+    console.log('[Gemini Extract] Converting PDF to base64...');
+    const pdfBase64 = pdfBuffer.toString("base64");
+    console.log('[Gemini Extract] Base64 size:', pdfBase64.length, "chars");
+
+    const filePart = {
+        inlineData: {
+            data: pdfBase64,
+            mimeType: "application/pdf"
+        }
+    };
+
+    const editorBlacklist = ['jimmy t efird', 'carey mather'];
+    const blacklistNote = editorBlacklist.map(e => `"${e}"`).join(', ');
+
+    const responseSchema = {
+        type: "OBJECT",
+        properties: {
+            title: { type: "STRING" },
+            authors: {
+                type: "ARRAY",
+                items: {
+                    type: "OBJECT",
+                    properties: {
+                        name: { type: "STRING" },
+                        affiliation: { type: "STRING" },
+                        role: { type: "STRING" },
+                        is_first_author: { type: "BOOLEAN" },
+                        is_co_first_author: { type: "BOOLEAN" },
+                        is_corresponding: { type: "BOOLEAN" },
+                        is_co_corresponding: { type: "BOOLEAN" }
+                    },
+                    required: ["name", "affiliation", "role", "is_first_author", "is_corresponding"]
+                }
+            },
+            journal: { type: "STRING" },
+            doi: { type: "STRING" },
+            publish_date: { type: "STRING" },
+            volume: { type: "STRING" },
+            issue: { type: "STRING" },
+            abstract: { type: "STRING" },
+            keywords: { type: "STRING" },
+            corresponding_author_name: { type: "STRING" }
+        },
+        required: ["title", "authors", "corresponding_author_name"]
+    };
+
+    const prompt = `
+คุณคือระบบ AI ผู้ช่วยสกัดข้อมูลงานวิจัยจากไฟล์ PDF โดยตรง
+อ่านไฟล์ PDF ด้านล่างนี้แล้วสกัดข้อมูลออกมาเป็น JSON เท่านั้น ตามโครงสร้างนี้:
+
+{
+  "title": "ชื่อเรื่องบทความ",
+  "authors": [
+    {
+      "name": "ชื่อ-นามสกุลของผู้แต่ง",
+      "affiliation": "สังกัด/มหาวิทยาลัย",
+      "role": "First Author, Co-Author, หรือ Corresponding Author",
+      "is_first_author": true/false,
+      "is_co_first_author": true/false,
+      "is_corresponding": true/false,
+      "is_co_corresponding": true/false
+    }
+  ],
+  "journal": "ชื่อวารสาร",
+  "doi": "รหัส DOI",
+  "publish_date": "YYYY-MM-DD",
+  "volume": "เล่มที่",
+  "issue": "ฉบับที่",
+  "abstract": "บทคัดย่อ",
+  "keywords": "คำสำคัญ",
+  "corresponding_author_name": "ชื่อเต็มของผู้แต่งที่มีเครื่องหมาย * หรือข้อความ Correspondence"
+}
+
+--- 🛑 กฎเหล็ก ---
+1. 🛑 Blacklist: ห้ามดึงรายชื่อ "Academic Editors", "Editors", "Reviewers" หรือบุคคลต่อไปนี้เข้ามาใน authors เด็ดขาด: ${blacklistNote}. ข้ามชื่อเหล่านี้ทันที
+2. ระบุ role ให้ถูกต้อง: First Author (คนแรกสุด), Co-Author (คนอื่น), Corresponding Author (มี * หรือ Correspondence)
+3. ห้าม default ให้ผู้แต่งคนแรกเป็น Corresponding Author หากไม่มีหลักฐานชัดเจน (เครื่องหมาย * หรือข้อความ Correspondence)
+4. ค้นหาผู้ที่มีเครื่องหมาย * หรือข้อความ "Correspondence:" ในเอกสาร แล้วบันทึกชื่อลงใน corresponding_author_name
+5. ⚠️ กฎเหล็กสำหรับ is_corresponding: ตั้ง is_corresponding: true เฉพาะเมื่อมีหลักฐานชัดเจน (สัญลักษณ์ * ติดชื่อ, อีเมล corresp, ข้อความ Corresponding author). ห้ามเดา! ถ้าไม่เจอหลักฐานให้ตั้ง false
+6. ⚠️ กฎเหล็กสำหรับ Symbol-to-Footnote Mapping: 1) Scan หารายชื่อที่มี * 2) หา footnote ที่มี "Correspondence:" 3) จับคู่ชื่อที่มี * กับ Correspondence email 4) บันทึกชื่อที่จับคู่ได้ลง corresponding_author_name
+
+ข้อมูล PDF (Base64):
+${pdfBase64}
+
+จงคืนค่าคำตอบเป็น JSON เท่านั้น ตามโครงสร้างข้างต้น ห้ามมี markdown หรือ explanation`;
+
+    try {
+        const model = genAI.getGenerativeModel({ 
+            model: MODEL_PRIMARY,
+            generationConfig: { responseMimeType: "application/json", responseSchema }
+        });
+
+        console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล...');
+        const result = await model.generateContent([filePart, prompt]);
+        const responseText = result.response.text();
+        
+        console.log('[Gemini Extract] ✓ Gemini ตอบกลับ:', responseText.substring(0, 200));
+        
+        return JSON.parse(responseText);
+    } catch (error) {
+        console.error('[Gemini Extract Error]:', error.message);
+        throw error;
     }
 }
 
@@ -597,6 +712,7 @@ function namesMatch(name1, name2) {
 }
 
 module.exports = {
+    extractMetadataWithGemini,
     refineMetadataWithLLM,
     identifyAuthorRoles
 };
