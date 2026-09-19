@@ -42,3 +42,6 @@ venv/
 env/
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Markdown / Documentation
+*.md

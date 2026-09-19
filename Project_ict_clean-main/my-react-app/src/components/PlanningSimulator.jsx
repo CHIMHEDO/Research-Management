@@ -77,19 +77,29 @@ function computeDateInfo(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
-  
   const beYear = y + 543;
+  const month = d.getMonth();
+
   const juneStart = new Date(y, 5, 15);
   const acadGregorian = d >= juneStart ? y : y - 1;
   
   const julyStart = new Date(y, 6, 1);
   const fiscalEndGregorian = d >= julyStart ? y + 1 : y;
 
+  const startBeYear = month >= 6 ? beYear : beYear - 1;
+  const endBeYear = startBeYear + 1;
+  const shortStartBe = String(startBeYear).slice(-2);
+  const shortEndBe = String(endBeYear).slice(-2);
+
   return {
     beLabel: `ปี พ.ศ. ${beYear}`,
     acadLabel: `ปีการศึกษา ${acadGregorian + 543}`,
     fiscalLabel: `ปีงบประมาณ ${fiscalEndGregorian + 543}`,
-    workloadLabel: `ปีภาระงาน ${acadGregorian + 543}`,
+    workloadLabel: `กรกฎาคม ${shortStartBe} - มิถุนายน ${shortEndBe}`,
+    workloadFullLabel: `กรกฎาคม ${startBeYear} - มิถุนายน ${endBeYear}`,
+    workloadCycleKey: `${startBeYear}-${endBeYear}`,
+    workloadStartYear: startBeYear,
+    workloadEndYear: endBeYear,
   };
 }
 

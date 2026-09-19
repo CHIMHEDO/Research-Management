@@ -20,7 +20,8 @@ import {
   Users,
   Globe,
   Calendar,
-  GraduationCap
+  GraduationCap,
+  BarChart3
 } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import LoginPage from "./components/LoginPage";
@@ -291,25 +292,69 @@ function calculateFacultyFunding(type, author, baseFaculty) {
   return baseFaculty;
 }
 
+function getWorkloadCycleInfo(dateInput) {
+  if (!dateInput) return null;
+  const d = dateInput instanceof Date ? dateInput : new Date(typeof dateInput === "string" && !dateInput.includes("T") ? dateInput + "T00:00:00" : dateInput);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const beYear = y + 543;
+  const month = d.getMonth(); // 0=Jan, 6=Jul, 11=Dec
+
+  const startBeYear = month >= 6 ? beYear : beYear - 1;
+  const endBeYear = startBeYear + 1;
+  const shortStart = String(startBeYear).slice(-2);
+  const shortEnd = String(endBeYear).slice(-2);
+
+  return {
+    cycleKey: `${startBeYear}-${endBeYear}`,
+    startBeYear,
+    endBeYear,
+    label: `กรกฎาคม ${shortStart} - มิถุนายน ${shortEnd}`,
+    fullLabel: `กรกฎาคม ${startBeYear} - มิถุนายน ${endBeYear}`,
+  };
+}
+
 function computeClientDateInfo(dateStr) {
   if (!dateStr) return null;
   const d = new Date(dateStr + "T00:00:00");
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
-  
   const beYear = y + 543;
+  const month = d.getMonth();
+  
   const juneStart = new Date(y, 5, 15);
   const acadGregorian = d >= juneStart ? y : y - 1;
   
   const julyStart = new Date(y, 6, 1);
   const fiscalEndGregorian = d >= julyStart ? y + 1 : y;
 
+  const startBeYear = month >= 6 ? beYear : beYear - 1;
+  const endBeYear = startBeYear + 1;
+  const shortStartBe = String(startBeYear).slice(-2);
+  const shortEndBe = String(endBeYear).slice(-2);
+
   return {
     beLabel: `ปี พ.ศ. ${beYear}`,
     acadLabel: `ปีการศึกษา ${acadGregorian + 543}`,
     fiscalLabel: `ปีงบประมาณ ${fiscalEndGregorian + 543}`,
-    workloadLabel: `ปีภาระงาน ${acadGregorian + 543}`,
+    workloadLabel: `กรกฎาคม ${shortStartBe} - มิถุนายน ${shortEndBe}`,
+    workloadFullLabel: `กรกฎาคม ${startBeYear} - มิถุนายน ${endBeYear}`,
+    workloadCycleKey: `${startBeYear}-${endBeYear}`,
+    workloadStartYear: startBeYear,
+    workloadEndYear: endBeYear,
   };
+}
+
+function getEntryCategory(type) {
+  if (!type) return "อื่นๆ";
+  for (const group of TYPE_GROUPS) {
+    if (group.types.includes(type)) return group.label;
+  }
+  if (type.includes("วารสาร")) return "วารสารวิชาการ";
+  if (type.includes("ประชุม")) return "การประชุมวิชาการ";
+  if (type.includes("สิทธิบัตร") || type.includes("ทรัพย์สิน")) return "ทรัพย์สินทางปัญญา";
+  if (type.includes("สร้างสรรค์")) return "งานสร้างสรรค์";
+  return "อื่นๆ";
 }
 
 function computeClientCalculation(formState) {
@@ -465,19 +510,147 @@ function computeClientCalculation(formState) {
     }
   };
 
+  // ข้อมูลรอบปีภาระงานปัจจุบัน (เช่น กรกฎาคม 69 - มิถุนายน 70)
+  const currentCycleInfo = useMemo(() => getWorkloadCycleInfo(new Date()), []);
+  const [selectedCycleFilter, setSelectedCycleFilter] = useState("CURRENT"); // 'CURRENT' | cycleKey | 'ALL'
+
+  // รวมรายการรอบปีภาระงานทั้งหมดที่มีในข้อมูล
+  const availableCycles = useMemo(() => {
+    const cycleMap = new Map();
+    if (currentCycleInfo) {
+      cycleMap.set(currentCycleInfo.cycleKey, {
+        key: currentCycleInfo.cycleKey,
+        label: currentCycleInfo.label,
+        startBe: currentCycleInfo.startBeYear,
+        isCurrent: true
+      });
+    }
+
+    entries.forEach(entry => {
+      const pDate = entry.publicationDate || entry.date;
+      const cInfo = entry.dateInfo?.workloadCycleKey 
+        ? {
+            key: entry.dateInfo.workloadCycleKey,
+            label: entry.dateInfo.workloadLabel || `กรกฎาคม ${String(entry.dateInfo.workloadStartYear || '').slice(-2)} - มิถุนายน ${String(entry.dateInfo.workloadEndYear || '').slice(-2)}`,
+            startBe: entry.dateInfo.workloadStartYear || parseInt(entry.dateInfo.workloadCycleKey.split('-')[0], 10),
+            isCurrent: false
+          }
+        : (pDate ? getWorkloadCycleInfo(pDate) : null);
+
+      if (cInfo) {
+        const k = cInfo.cycleKey || cInfo.key;
+        if (!cycleMap.has(k)) {
+          cycleMap.set(k, {
+            key: k,
+            label: cInfo.label,
+            startBe: cInfo.startBeYear || cInfo.startBe || 0,
+            isCurrent: k === currentCycleInfo?.cycleKey
+          });
+        }
+      }
+    });
+
+    return Array.from(cycleMap.values()).sort((a, b) => b.startBe - a.startBe);
+  }, [entries, currentCycleInfo]);
+
+  const activeCycleKey = selectedCycleFilter === "CURRENT" ? (currentCycleInfo?.cycleKey || "") : selectedCycleFilter;
+  const activeCycleObj = availableCycles.find(c => c.key === activeCycleKey);
+  const activeCycleLabel = selectedCycleFilter === "ALL" 
+    ? "ทุกรอบปี" 
+    : (activeCycleObj ? activeCycleObj.label : (currentCycleInfo?.label || ""));
+
+  // กรองรายการตามรอบปีภาระงาน (เพื่อคำนวณชั่วโมงสะสม & สถิติ)
+  const cycleFilteredEntries = useMemo(() => {
+    if (selectedCycleFilter === "ALL") return entries;
+    const targetKey = activeCycleKey;
+    return entries.filter(e => {
+      const pDate = e.publicationDate || e.date;
+      const cycleKey = e.dateInfo?.workloadCycleKey || (pDate ? getWorkloadCycleInfo(pDate)?.cycleKey : null);
+      return cycleKey === targetKey;
+    });
+  }, [entries, selectedCycleFilter, activeCycleKey]);
+
+  // สรุปยอดตามรอบปีภาระงาน
   const totals = useMemo(() => {
-    let hours = 0, faculty = 0, uni = 0, count = entries.length;
-    entries.forEach(e => {
+    let hours = 0, faculty = 0, uni = 0;
+    cycleFilteredEntries.forEach(e => {
       hours += e.actualHours || 0;
       faculty += e.faculty || 0;
       uni += e.uni || 0;
     });
-    return { hours: Math.round(hours * 100) / 100, faculty, uni, count };
-  }, [entries]);
+    return {
+      hours: Math.round(hours * 100) / 100,
+      faculty,
+      uni,
+      count: cycleFilteredEntries.length,
+      allCount: entries.length
+    };
+  }, [cycleFilteredEntries, entries.length]);
+
+  // สถิติตาม 4 หมวดหมู่หลัก (จำนวนชิ้นผลงาน)
+  const categoryStats = useMemo(() => {
+    const counts = {
+      "วารสารวิชาการ": 0,
+      "การประชุมวิชาการ": 0,
+      "ทรัพย์สินทางปัญญา": 0,
+      "งานสร้างสรรค์": 0,
+    };
+
+    cycleFilteredEntries.forEach(e => {
+      const cat = getEntryCategory(e.type);
+      if (counts[cat] !== undefined) {
+        counts[cat] += 1;
+      }
+    });
+
+    const categories = [
+      { 
+        key: "วารสารวิชาการ", 
+        label: "วารสารวิชาการ", 
+        count: counts["วารสารวิชาการ"], 
+        color: "#7c3aed", 
+        bg: "#f5f3ff", 
+        border: "#ddd6fe",
+        barGradient: "linear-gradient(90deg, #a78bfa 0%, #7c3aed 100%)" 
+      },
+      { 
+        key: "การประชุมวิชาการ", 
+        label: "การประชุมวิชาการ", 
+        count: counts["การประชุมวิชาการ"], 
+        color: "#2563eb", 
+        bg: "#eff6ff", 
+        border: "#bfdbfe",
+        barGradient: "linear-gradient(90deg, #60a5fa 0%, #2563eb 100%)" 
+      },
+      { 
+        key: "ทรัพย์สินทางปัญญา", 
+        label: "ทรัพย์สินทางปัญญา", 
+        count: counts["ทรัพย์สินทางปัญญา"], 
+        color: "#d97706", 
+        bg: "#fffbeb", 
+        border: "#fde68a",
+        barGradient: "linear-gradient(90deg, #fbbf24 0%, #d97706 100%)" 
+      },
+      { 
+        key: "งานสร้างสรรค์", 
+        label: "งานสร้างสรรค์", 
+        count: counts["งานสร้างสรรค์"], 
+        color: "#059669", 
+        bg: "#ecfdf5", 
+        border: "#a7f3d0",
+        barGradient: "linear-gradient(90deg, #34d399 0%, #059669 100%)" 
+      },
+    ];
+
+    const maxCount = Math.max(...categories.map(c => c.count), 1);
+    const totalCount = categories.reduce((sum, c) => sum + c.count, 0);
+
+    return { categories, maxCount, totalCount };
+  }, [cycleFilteredEntries]);
 
   // Filtered entries according to search keyword & category tag
   const filteredEntries = useMemo(() => {
-    return entries.filter(item => {
+    return cycleFilteredEntries.filter(item => {
       const searchLower = searchTerm.toLowerCase();
       const matchSearch = !searchTerm || 
         (item.title && item.title.toLowerCase().includes(searchLower)) ||
@@ -492,7 +665,7 @@ function computeClientCalculation(formState) {
 
       return matchSearch && matchCategory;
     });
-  }, [entries, searchTerm, selectedCategoryFilter]);
+  }, [cycleFilteredEntries, searchTerm, selectedCategoryFilter]);
 
   // Helper for Database Quality Badge
   const renderDbBadge = (dbName) => {
@@ -1041,29 +1214,58 @@ function computeClientCalculation(formState) {
         {/* Dashboard Tab */}
         {tab === "dashboard" && (
           <div className="dashboard-container">
-            {/* Top Banner: Subtitle + Button */}
+            {/* Top Banner: Subtitle + Cycle Selector + Add Button */}
             <div className="dashboard-top-banner">
-              <h2 className="dashboard-intro-title">
-                นี่คือภาพรวมผลงานวิชาการของคุณในภาคเรียนนี้
-              </h2>
-              <button
-                type="button"
-                onClick={() => setTab("form")}
-                className="btn-ams-primary-add"
-              >
-                <Plus size={16} />
-                <span>เพิ่มผลงานใหม่</span>
-              </button>
+              <div>
+                <h2 className="dashboard-intro-title">
+                  ภาพรวมผลงานวิชาการและภาระงานของคุณ
+                </h2>
+                <div className="dashboard-intro-subtitle">
+                  รอบปีภาระงาน: <span className="highlight-cycle-text">{activeCycleLabel}</span> (ตัดรอบสะสม 1 ก.ค. - 30 มิ.ย.)
+                </div>
+              </div>
+              <div className="dashboard-banner-actions">
+                <div className="cycle-selector-box">
+                  <Calendar size={15} className="cycle-selector-icon" />
+                  <select
+                    value={selectedCycleFilter}
+                    onChange={(e) => setSelectedCycleFilter(e.target.value)}
+                    className="cycle-select-dropdown"
+                    title="เลือกรอบปีภาระงานเพื่อดูสถิติสะสม"
+                  >
+                    <option value="CURRENT">รอบปัจจุบัน ({currentCycleInfo?.label})</option>
+                    {availableCycles.filter(c => !c.isCurrent).map(c => (
+                      <option key={c.key} value={c.key}>รอบ {c.label}</option>
+                    ))}
+                    <option value="ALL">ดูทุกรอบปี (ทั้งหมด)</option>
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setTab("form")}
+                  className="btn-ams-primary-add"
+                >
+                  <Plus size={16} />
+                  <span>เพิ่มผลงานใหม่</span>
+                </button>
+              </div>
             </div>
 
-            {/* Top Row: [Score Card + 3 KPI Cards in Single Row] */}
+            {/* Top Row: [Score Card + Total Works KPI + Bar Chart] */}
             <div className="dashboard-top-grid">
               {/* Workload Progress Donut Chart */}
               <div className="ams-score-card">
-                <div className="score-card-title">ภาระงาน</div>
+                <div className="score-card-header-flex">
+                  <div className="score-card-title">ชั่วโมงภาระงานสะสม</div>
+                  <span className="cycle-mini-pill" title="รีเซ็ตยอดสะสมอัตโนมัติทุก 1 กรกฎาคม">
+                    <Clock size={12} />
+                    <span>{selectedCycleFilter === 'ALL' ? 'ทุกรอบปี' : activeCycleLabel}</span>
+                  </span>
+                </div>
 
                 <div className="donut-chart-wrapper">
-                  <svg width="160" height="160" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
+                  <svg width="150" height="150" viewBox="0 0 36 36" style={{ transform: "rotate(-90deg)" }}>
                     <path
                       d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                       fill="none"
@@ -1087,7 +1289,7 @@ function computeClientCalculation(formState) {
 
                 <div className="workload-target-progress-box">
                   <div className="workload-progress-labels">
-                    <span>ชั่วโมงภาระงานสะสม</span>
+                    <span>ภาระงานสะสมในรอบ</span>
                     <span><b>{totals.hours || 0}</b> ชม.</span>
                   </div>
                 </div>
@@ -1099,32 +1301,67 @@ function computeClientCalculation(formState) {
                   <div className="kpi-icon-square kpi-icon-purple">
                     <BookMarked size={20} />
                   </div>
-                  <span className="kpi-term-pill">ภาคเรียน 1/2567</span>
+                  <span className="kpi-term-pill">{activeCycleLabel}</span>
                 </div>
                 <div>
-                  <div className="kpi-title-label">ผลงานทั้งหมด</div>
+                  <div className="kpi-title-label">ผลงานทั้งหมดในรอบนี้</div>
                   <div className="kpi-main-number">
                     {totals.count} <span className="kpi-unit-label">ชิ้น</span>
                   </div>
+                  {selectedCycleFilter !== "ALL" && entries.length > totals.count && (
+                    <div className="kpi-sub-total-note">
+                      รวมทั้งหมด {entries.length} ชิ้น (ทุกรอบปี)
+                    </div>
+                  )}
                 </div>
               </div>
 
-
-              {/* KPI 3: รอบการจ่ายเงินถัดไป */}
-              <div className="ams-kpi-card kpi-border-green">
-                <div className="kpi-card-top">
-                  <div className="kpi-icon-square kpi-icon-green">
-                    <Coins size={20} />
+              {/* Bar Chart: แผนภูมิแท่งแสดงจำนวนประเภทภาระงาน (4 หมวดหมู่หลัก) */}
+              <div className="ams-barchart-card">
+                <div className="barchart-card-top">
+                  <div className="barchart-title-wrap">
+                    <div className="barchart-icon-square">
+                      <BarChart3 size={18} color="#7c3aed" />
+                    </div>
+                    <div>
+                      <div className="barchart-title">สถิติตามประเภทภาระงาน</div>
+                      <div className="barchart-subtitle">จำนวนผลงานแยกตาม 4 หมวดหมู่หลัก</div>
+                    </div>
                   </div>
-                  <span className="kpi-term-pill" style={{ color: "#059669", background: "#ecfdf5" }}>งวดถัดไป</span>
+                  <span className="barchart-count-badge">รวม {categoryStats.totalCount} ชิ้น</span>
                 </div>
-                <div>
-                  <div className="kpi-title-label">รอบการจ่ายเงินถัดไป</div>
-                  <div className="kpi-date-value">25 พ.ย.</div>
-                  <div className="kpi-status-subtext">
-                    <CheckCircle2 size={13} />
-                    <span>เอกสารครบถ้วน ({(totals.faculty + totals.uni).toLocaleString()} ฿)</span>
-                  </div>
+
+                <div className="barchart-items-list">
+                  {categoryStats.categories.map((cat) => {
+                    const pct = categoryStats.maxCount > 0 ? (cat.count / categoryStats.maxCount) * 100 : 0;
+                    const isFilterActive = selectedCategoryFilter === cat.key;
+                    return (
+                      <div
+                        key={cat.key}
+                        className={`barchart-bar-item ${isFilterActive ? "active" : ""}`}
+                        onClick={() => setSelectedCategoryFilter(selectedCategoryFilter === cat.key ? "ทั้งหมด" : cat.key)}
+                        title={`คลิกเพื่อกรองเฉพาะ ${cat.label}`}
+                      >
+                        <div className="barchart-bar-header">
+                          <span className="barchart-cat-name" style={{ color: cat.count > 0 ? "#1e293b" : "#94a3b8" }}>
+                            {cat.label}
+                          </span>
+                          <span className="barchart-cat-val" style={{ color: cat.color }}>
+                            <b>{cat.count}</b> <span className="barchart-val-unit">ชิ้น</span>
+                          </span>
+                        </div>
+                        <div className="barchart-bar-track">
+                          <div
+                            className="barchart-bar-fill"
+                            style={{
+                              width: `${Math.max(pct, cat.count > 0 ? 10 : 0)}%`,
+                              background: cat.barGradient,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
