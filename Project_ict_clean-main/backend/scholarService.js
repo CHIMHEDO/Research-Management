@@ -1,5 +1,5 @@
 const axios = require('axios');
-const pool = require('./db');
+const { supabase } = require('./db');
 require('dotenv').config();
 
 /**
@@ -7,13 +7,12 @@ require('dotenv').config();
  */
 async function isPaperBlacklisted(userId, title) {
     if (!title) return false;
-    const [rows] = await pool.query(
-        `SELECT id FROM paper_blacklists 
-         WHERE user_id = ? AND LOWER(TRIM(scholar_title)) = LOWER(TRIM(?)) 
-         LIMIT 1`,
-        [userId, title]
-    );
-    return rows.length > 0;
+    const { data: blacklistRows } = await supabase
+        .from('paper_blacklists')
+        .select('id')
+        .eq('user_id', userId)
+        .ilike('scholar_title', title);
+    return blacklistRows && blacklistRows.length > 0;
 }
 
 /**
@@ -206,10 +205,9 @@ async function fetchDirectFromGoogleScholarProfile(scholarId) {
         const url = `https://scholar.google.com/citations?user=${scholarId}&hl=en`;
         await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        // คลิกปุ่ม "Show more" ซ้ำจนกว่าจะไม่มีอีก (ดึงผลงานทั้งหมด)
         let hasMore = true;
         let clickCount = 0;
-        const maxClicks = 20; // กันลูปไม่รู้จบ
+        const maxClicks = 20;
 
         while (hasMore && clickCount < maxClicks) {
             try {
@@ -231,7 +229,6 @@ async function fetchDirectFromGoogleScholarProfile(scholarId) {
             }
         }
 
-        // ดึงข้อมูลผลงานทั้งหมด
         const papers = await page.evaluate(() => {
             const results = [];
             const rows = document.querySelectorAll('.gsc_a_tr');
@@ -244,9 +241,22 @@ async function fetchDirectFromGoogleScholarProfile(scholarId) {
                 const hrefEl = row.querySelector('.gsc_a_at');
 
                 if (titleEl) {
+                    let scholar_url = null;
+                    if (hrefEl) {
+                        scholar_url = hrefEl.href;
+                        if (!scholar_url || scholar_url.trim() === '') {
+                            const rawHref = hrefEl.getAttribute('href');
+                            if (rawHref) {
+                                scholar_url = rawHref.startsWith('http')
+                                    ? rawHref
+                                    : `https://scholar.google.com${rawHref}`;
+                            }
+                        }
+                    }
+
                     results.push({
                         title: titleEl.innerText.trim(),
-                        scholar_url: hrefEl ? 'https://scholar.google.com' + hrefEl.getAttribute('href') : null,
+                        scholar_url: scholar_url,
                         authors_raw: authorsEl ? authorsEl.innerText.trim() : '',
                         cited_by: citeEl && citeEl.innerText.trim() !== '' ? parseInt(citeEl.innerText.trim()) : 0,
                         publish_year: yearEl && yearEl.innerText.trim() !== '' ? parseInt(yearEl.innerText.trim()) : null
@@ -276,7 +286,6 @@ async function fetchFromGoogleScholar(nameEn, email, scholarId) {
     const provider = (process.env.SCHOLAR_PROVIDER || 'auto').toLowerCase();
     const apiKey = process.env.SERPAPI_KEY;
 
-    // Tier 1: SerpApi (กรณีตั้งใจใช้งานและมี API Key)
     if (provider === 'serpapi' && apiKey) {
         try {
             return await fetchFromSerpApi(nameEn, email, scholarId, apiKey);
@@ -285,7 +294,6 @@ async function fetchFromGoogleScholar(nameEn, email, scholarId) {
         }
     }
 
-    // Tier 2: Direct Google Scholar Profile (ข้อมูลจริง 100% ผ่าน scholar_id)
     if (scholarId) {
         try {
             const realArticles = await fetchDirectFromGoogleScholarProfile(scholarId);
@@ -297,88 +305,91 @@ async function fetchFromGoogleScholar(nameEn, email, scholarId) {
         }
     }
 
-    // Tier 3: Realistic Data สำหรับการพัฒนาและทดสอบอย่างปลอดภัย
     return fetchRealisticMockData(nameEn, email, scholarId);
 }
 
 /**
- * บันทึกผลงานและเชื่อมโยงกับผู้ใช้ใน MySQL
+ * บันทึกผลงานและเชื่อมโยงกับผู้ใช้ใน Supabase
  */
 async function savePaperAndAuthor(userId, rawPaper) {
     const paper = cleanAndParsePaper(rawPaper);
     if (!paper || !paper.title) return null;
 
-    // เช็ค Blacklist
     const isBlacklisted = await isPaperBlacklisted(userId, paper.title);
     if (isBlacklisted) {
         console.log(`[Scholar Sync] ข้ามบทความ "${paper.title}" เนื่องจากถูกผู้ใช้ ID ${userId} ปฏิเสธ (Blacklisted)`);
         return null;
     }
 
-    // 1. ตรวจสอบว่ามีบทความนี้ในตาราง papers แล้วหรือไม่
-    const [existingPapers] = await pool.query(
-        'SELECT id, authors_raw, cited_by FROM papers WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) LIMIT 1',
-        [paper.title]
-    );
+    const { data: existingPapers } = await supabase
+        .from('papers')
+        .select('id, authors_raw, cited_by')
+        .ilike('title', paper.title)
+        .limit(1);
 
     let paperId;
     let isNewPaper = false;
 
-    if (existingPapers.length > 0) {
+    if (existingPapers && existingPapers.length > 0) {
         paperId = existingPapers[0].id;
-        // อัปเดตข้อมูลปี และยอด citation หากมีข้อมูลใหม่กว่า
-        await pool.query(
-            `UPDATE papers 
-             SET cited_by = GREATEST(cited_by, ?), 
-                 publish_year = COALESCE(?, publish_year),
-                 scholar_url = COALESCE(?, scholar_url)
-             WHERE id = ?`,
-            [paper.cited_by || 0, paper.publish_year, paper.scholar_url, paperId]
-        );
+        const currentCitedBy = existingPapers[0].cited_by || 0;
+        const newCitedBy = Math.max(currentCitedBy, paper.cited_by || 0);
+        const newPublishYear = paper.publish_year || existingPapers[0].publish_year;
+        const newScholarUrl = paper.scholar_url || existingPapers[0].scholar_url;
+        await supabase
+            .from('papers')
+            .update({ cited_by: newCitedBy, publish_year: newPublishYear, scholar_url: newScholarUrl })
+            .eq('id', paperId);
     } else {
-        const [res] = await pool.query(
-            `INSERT INTO papers (title, publish_year, authors_raw, cited_by, scholar_url, source, status) 
-             VALUES (?, ?, ?, ?, ?, 'scholar', 'DRAFT_AUTO')`,
-            [paper.title, paper.publish_year, paper.authors_raw, paper.cited_by || 0, paper.scholar_url]
-        );
-        paperId = res.insertId;
+        const { data: inserted, error: insertError } = await supabase
+            .from('papers')
+            .insert([{
+                title: paper.title,
+                publish_year: paper.publish_year,
+                authors_raw: paper.authors_raw,
+                cited_by: paper.cited_by || 0,
+                scholar_url: paper.scholar_url,
+                source: 'scholar',
+                status: 'DRAFT_AUTO'
+            }])
+            .select();
+        paperId = inserted?.[0]?.id;
         isNewPaper = true;
     }
 
-    // 2. เชื่อมโยงผลงานเข้ากับ user ในตาราง paper_authors
-    const [existingLink] = await pool.query(
-        'SELECT id, status FROM paper_authors WHERE paper_id = ? AND user_id = ?',
-        [paperId, userId]
-    );
+    const { data: existingLink } = await supabase
+        .from('paper_authors')
+        .select('id, status')
+        .eq('paper_id', paperId)
+        .eq('user_id', userId);
 
-    if (existingLink.length === 0) {
-        await pool.query(
-            `INSERT INTO paper_authors (paper_id, user_id, status, contribution_percent) 
-             VALUES (?, ?, 'PENDING', 0.00)`,
-            [paperId, userId]
-        );
+    if (!existingLink || existingLink.length === 0) {
+        await supabase
+            .from('paper_authors')
+            .insert([{ paper_id: paperId, user_id: userId, status: 'PENDING', contribution_percent: 0.00 }]);
     }
 
-    // 3. ตรวจสอบ Co-author คนอื่นๆ ในระบบ UP ICT ว่ามีชื่ออยู่ใน authors_raw ด้วยหรือไม่
     if (paper.authors_raw) {
-        const [allUsers] = await pool.query('SELECT id, name_en, name_th FROM users WHERE id != ?', [userId]);
+        const { data: allUsers } = await supabase
+            .from('users')
+            .select('id, name_en, name_th')
+            .neq('id', userId);
         for (const otherUser of allUsers) {
             const hasMatch = (otherUser.name_en && isAuthorInRawText(otherUser.name_en, paper.authors_raw)) ||
-                             (otherUser.name_th && isAuthorInRawText(otherUser.name_th, paper.authors_raw));
+                              (otherUser.name_th && isAuthorInRawText(otherUser.name_th, paper.authors_raw));
             
             if (hasMatch) {
                 const isOtherBlacklisted = await isPaperBlacklisted(otherUser.id, paper.title);
                 if (!isOtherBlacklisted) {
-                    const [otherLink] = await pool.query(
-                        'SELECT id FROM paper_authors WHERE paper_id = ? AND user_id = ?',
-                        [paperId, otherUser.id]
-                    );
-                    if (otherLink.length === 0) {
-                        await pool.query(
-                            `INSERT INTO paper_authors (paper_id, user_id, status, contribution_percent) 
-                             VALUES (?, ?, 'PENDING', 0.00)`,
-                            [paperId, otherUser.id]
-                        );
+                    const { data: otherLink } = await supabase
+                        .from('paper_authors')
+                        .select('id')
+                        .eq('paper_id', paperId)
+                        .eq('user_id', otherUser.id);
+                    if (!otherLink || otherLink.length === 0) {
+                        await supabase
+                            .from('paper_authors')
+                            .insert([{ paper_id: paperId, user_id: otherUser.id, status: 'PENDING', contribution_percent: 0.00 }]);
                         console.log(`[Co-author Match] เชื่อมโยงผลงาน "${paper.title}" เข้ากับอาจารย์ ${otherUser.name_en || otherUser.name_th} (ID: ${otherUser.id}) อัตโนมัติ`);
                     }
                 }
@@ -393,8 +404,11 @@ async function savePaperAndAuthor(userId, rawPaper) {
  * Sync ข้อมูล Google Scholar ของอาจารย์รายบุคคล
  */
 async function syncUserScholarData(userId) {
-    const [users] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
-    if (users.length === 0) {
+    const { data: users } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId);
+    if (!users || users.length === 0) {
         throw new Error(`ไม่พบผู้ใช้ ID: ${userId}`);
     }
 
@@ -407,15 +421,14 @@ async function syncUserScholarData(userId) {
         skipped: 0
     };
 
-    // ดึงรายชื่ออาจารย์ทั้งหมดในระบบเตรียมไว้สำหรับ Co-author auto-detect
-    const [allUsers] = await pool.query('SELECT id, name_en, name_th FROM users');
+    const { data: allUsers } = await supabase
+        .from('users')
+        .select('id, name_en, name_th');
 
     for (const rawPaper of rawPapers) {
-        // นำข้อมูลดิบผ่านกระบวนการ Data Parser & Cleaning
         const paper = cleanAndParsePaper(rawPaper);
         if (!paper || !paper.title) continue;
 
-        // 1. ตรวจสอบ Blacklist ของผู้ใช้คนนี้
         const blacklisted = await isPaperBlacklisted(user.id, paper.title);
         if (blacklisted) {
             console.log(`[Scholar Sync] ข้ามผลงานที่ถูกปฏิเสธ (Blacklisted) สำหรับ User ${user.id}: "${paper.title}"`);
@@ -423,90 +436,100 @@ async function syncUserScholarData(userId) {
             continue;
         }
 
-        // 2. ตรวจสอบว่าผลงานมีอยู่ในตาราง papers แล้วหรือไม่
-        const existing = await pool.query(
-            `SELECT id, status, cited_by FROM papers 
-             WHERE (scholar_url IS NOT NULL AND scholar_url != '' AND scholar_url = ?)
-                OR (LOWER(TRIM(title)) = LOWER(TRIM(?)) AND publish_year = ?)
-             LIMIT 1`,
-            [paper.scholar_url, paper.title, paper.publish_year]
-        );
+        let existingData = [];
+        if (paper.scholar_url) {
+            const { data: byUrl } = await supabase
+                .from('papers')
+                .select('id, status, cited_by, scholar_url')
+                .eq('scholar_url', paper.scholar_url)
+                .limit(1);
+            if (byUrl && byUrl.length > 0) existingData = byUrl;
+        }
+        if (existingData.length === 0) {
+            const query = supabase.from('papers').select('id, status, cited_by, scholar_url').eq('title', paper.title);
+            const { data: byTitle } = paper.publish_year
+                ? await query.eq('publish_year', paper.publish_year)
+                : await query.is('publish_year', null);
+            existingData = byTitle || [];
+        }
+
+        console.log(`[Scholar Sync] existing query result: ${existingData.length} papers, scholar_url=${paper.scholar_url}`);
 
         let paperId = null;
 
-        if (existing[0].length === 0) {
-            // 3.1 กรณีผลงานยังไม่มีในระบบ -> สร้างใหม่ (สถานะเริ่มต้น DRAFT_AUTO ตามข้อกำหนด)
-            const inserted = await pool.query(
-	                `INSERT INTO papers (title, publish_year, authors_raw, cited_by, scholar_url, source, status)
-	                 VALUES (?, ?, ?, ?, ?, 'scholar', 'DRAFT_AUTO')
-	                 ON CONFLICT (title, publish_year) DO NOTHING`,
-	                [paper.title, paper.publish_year, paper.authors_raw, paper.cited_by, paper.scholar_url]
-	            );
-	            paperId = inserted[1].insertId || inserted[0][0]?.id || null;
+        if (existingData.length === 0) {
+            const { data: upserted, error: upsertError } = await supabase
+                .from('papers')
+                .upsert([{
+                    title: paper.title,
+                    publish_year: paper.publish_year,
+                    authors_raw: paper.authors_raw,
+                    cited_by: paper.cited_by,
+                    scholar_url: paper.scholar_url,
+                    source: 'scholar',
+                    status: 'DRAFT_AUTO'
+                }], { onConflict: 'title,publish_year' })
+                .select();
+            paperId = upserted?.[0]?.id || null;
 
-	            // หาก paperId เป็น null (ข้อมูลซ้ำ) ให้ค้นหา ID จาก DB
-	            if (!paperId) {
-	                const paperLookup = await pool.query(
-	                    `SELECT id FROM papers WHERE title = ? AND publish_year = ?`,
-	                    [paper.title, paper.publish_year]
-	                );
-	                if (paperLookup[0] && paperLookup[0].length > 0) {
-	                    paperId = paperLookup[0][0].id;
-	                }
-	            }
+            if (!paperId) {
+                const { data: paperLookup } = await supabase
+                    .from('papers')
+                    .select('id')
+                    .eq('title', paper.title)
+                    .eq('publish_year', paper.publish_year)
+                    .limit(1);
+                if (paperLookup && paperLookup.length > 0) {
+                    paperId = paperLookup[0].id;
+                }
+            }
 
-            // ผูกผู้ใช้เข้ากับผลงาน (สถานะ PENDING)
-            await pool.query(
-`INSERT INTO paper_authors (paper_id, user_id, status)
-	                     VALUES (?, ?, 'PENDING')
-	                     ON CONFLICT (paper_id, user_id) DO NOTHING`,
-                     [paperId, user.id]
-	                 );
+            await supabase
+                .from('paper_authors')
+                .upsert([{ paper_id: paperId, user_id: user.id, status: 'PENDING' }], { onConflict: 'paper_id,user_id', ignoreDuplicates: true });
 
             results.created.push({ id: paperId, title: paper.title });
         } else {
-            // 3.2 กรณีผลงานมีอยู่ในระบบแล้ว (อาจถูกดึงมาก่อนหน้า หรือสร้างโดย Co-author)
-            const existingPaper = existing[0][0];
+            const existingPaper = existingData[0];
             paperId = existingPaper.id;
 
-            // ตรวจสอบว่าผู้ใช้คนนี้เคยถูกผูกกับผลงานนี้หรือยัง
-            const authorCheck = await pool.query(
-                `SELECT id, status FROM paper_authors WHERE paper_id = ? AND user_id = ?`,
-                [paperId, user.id]
-            );
+            const { data: authorCheck } = await supabase
+                .from('paper_authors')
+                .select('id, status')
+                .eq('paper_id', paperId)
+                .eq('user_id', user.id);
 
-            if (authorCheck[0].length === 0) {
-                // ยังไม่เคยผูก -> ผูกผู้ใช้คนนี้เข้ากับผลงาน
-await pool.query(
-	                    `INSERT INTO paper_authors (paper_id, user_id, status)
-	                     VALUES (?, ?, 'PENDING')
-	                     ON CONFLICT (paper_id, user_id) DO NOTHING`,
-	                    [paperId, user.id]
-	                );
+            if (!authorCheck || authorCheck.length === 0) {
+                await supabase
+                    .from('paper_authors')
+                    .upsert([{ paper_id: paperId, user_id: user.id, status: 'PENDING' }], { onConflict: 'paper_id,user_id', ignoreDuplicates: true });
 
-                // ปรับสถานะบทความเป็น PENDING_CO_AUTHOR หากยังเป็น DRAFT_AUTO
                 if (existingPaper.status === 'DRAFT_AUTO') {
-                    await pool.query(
-                        `UPDATE papers SET status = 'PENDING_CO_AUTHOR', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-                        [paperId]
-                    );
+                    await supabase
+                        .from('papers')
+                        .update({ status: 'PENDING_CO_AUTHOR', updated_at: new Date().toISOString() })
+                        .eq('id', paperId);
                 }
 
                 results.linked.push({ id: paperId, title: paper.title });
                 console.log(`[Scholar Sync] ซิงก์ผู้เขียนร่วมสำเร็จ: User ${user.id} -> Paper ${paperId}`);
             } else {
-                // เคยผูกไว้แล้ว -> อัปเดต cited_by หากจำนวนอ้างอิงใหม่สูงขึ้น
                 if (paper.cited_by > (existingPaper.cited_by || 0)) {
-                    await pool.query(
-                        `UPDATE papers SET cited_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-                        [paper.cited_by, paperId]
-                    );
+                    await supabase
+                        .from('papers')
+                        .update({ cited_by: paper.cited_by, updated_at: new Date().toISOString() })
+                        .eq('id', paperId);
+                }
+                if (paper.scholar_url && paper.scholar_url !== (existingPaper.scholar_url || '')) {
+                    await supabase
+                        .from('papers')
+                        .update({ scholar_url: paper.scholar_url, updated_at: new Date().toISOString() })
+                        .eq('id', paperId);
                 }
                 results.skipped++;
             }
         }
 
-        // 4. Co-author Auto-detection: ค้นหาผู้เขียนร่วมคนอื่นใน authors_raw
         if (paperId && paper.authors_raw) {
             for (const otherUser of allUsers) {
                 if (otherUser.id === user.id) continue;
@@ -517,25 +540,22 @@ await pool.query(
                 if (isMatch) {
                     const isOtherBlacklisted = await isPaperBlacklisted(otherUser.id, paper.title);
                     if (!isOtherBlacklisted) {
-                        const checkOther = await pool.query(
-                            `SELECT id FROM paper_authors WHERE paper_id = ? AND user_id = ?`,
-                            [paperId, otherUser.id]
-                        );
+                        const { data: checkOther } = await supabase
+                            .from('paper_authors')
+                            .select('id')
+                            .eq('paper_id', paperId)
+                            .eq('user_id', otherUser.id);
 
-                        if (checkOther[0].length === 0) {
-                            await pool.query(
-`INSERT INTO paper_authors (paper_id, user_id, status)
-	                                 VALUES (?, ?, 'PENDING')
-	                                 ON CONFLICT (paper_id, user_id) DO NOTHING`,
-	                                [paperId, otherUser.id]
-	                            );
+                        if (!checkOther || checkOther.length === 0) {
+                            await supabase
+                                .from('paper_authors')
+                                .upsert([{ paper_id: paperId, user_id: otherUser.id, status: 'PENDING' }], { onConflict: 'paper_id,user_id', ignoreDuplicates: true });
 
-                            await pool.query(
-                                `UPDATE papers 
-                                 SET status = 'PENDING_CO_AUTHOR', updated_at = CURRENT_TIMESTAMP 
-                                 WHERE id = ? AND status = 'DRAFT_AUTO'`,
-                                [paperId]
-                            );
+                            await supabase
+                                .from('papers')
+                                .update({ status: 'PENDING_CO_AUTHOR', updated_at: new Date().toISOString() })
+                                .eq('id', paperId)
+                                .eq('status', 'DRAFT_AUTO');
                             console.log(`[Scholar Sync] ตรวจพบผู้เขียนร่วมอัตโนมัติ: User ${otherUser.id} (${otherUser.name_en}) -> Paper ${paperId}`);
                         }
                     }
@@ -551,7 +571,10 @@ await pool.query(
  * Sync ข้อมูลอาจารย์ทั้งหมดในระบบ
  */
 async function syncAllUsersScholarData() {
-    const [users] = await pool.query('SELECT * FROM users ORDER BY id ASC');
+    const { data: users } = await supabase
+        .from('users')
+        .select('*')
+        .order('id', { ascending: true });
     const aggregate = {
         createdCount: 0,
         newPapers: [],
@@ -562,6 +585,8 @@ async function syncAllUsersScholarData() {
         skippedCount: 0,
         errors: []
     };
+
+    if (!users) return aggregate;
 
     for (const user of users) {
         try {
@@ -594,25 +619,24 @@ async function rejectAndBlacklistPaper(userId, scholarTitle, paperId = null) {
         throw new Error('ต้องระบุ userId และ scholarTitle');
     }
 
-    // 1. นำเข้า paper_blacklists
-    const [existing] = await pool.query(
-        'SELECT id FROM paper_blacklists WHERE user_id = ? AND scholar_title = ?',
-        [userId, scholarTitle]
-    );
+    const { data: existing } = await supabase
+        .from('paper_blacklists')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('scholar_title', scholarTitle);
 
-    if (existing.length === 0) {
-        await pool.query(
-            'INSERT INTO paper_blacklists (user_id, scholar_title) VALUES (?, ?)',
-            [userId, scholarTitle]
-        );
+    if (!existing || existing.length === 0) {
+        await supabase
+            .from('paper_blacklists')
+            .insert([{ user_id: userId, scholar_title: scholarTitle }]);
     }
 
-    // 2. ลบออกจาก paper_authors
     if (paperId) {
-        await pool.query(
-            'DELETE FROM paper_authors WHERE paper_id = ? AND user_id = ?',
-            [paperId, userId]
-        );
+        await supabase
+            .from('paper_authors')
+            .delete()
+            .eq('paper_id', paperId)
+            .eq('user_id', userId);
     }
 
     return {
@@ -626,22 +650,114 @@ async function rejectAndBlacklistPaper(userId, scholarTitle, paperId = null) {
  * ดึงรายการ Blacklist ของผู้ใช้
  */
 async function getBlacklistByUser(userId) {
-    const [rows] = await pool.query(
-        'SELECT * FROM paper_blacklists WHERE user_id = ? ORDER BY rejected_at DESC',
-        [userId]
-    );
-    return rows;
+    const { data: rows } = await supabase
+        .from('paper_blacklists')
+        .select('*')
+        .eq('user_id', userId)
+        .order('rejected_at', { ascending: false });
+    return rows || [];
 }
 
 /**
  * ยกเลิก Blacklist
  */
 async function unblacklistPaper(userId, blacklistId) {
-    await pool.query(
-        'DELETE FROM paper_blacklists WHERE id = ? AND user_id = ?',
-        [blacklistId, userId]
-    );
+    await supabase
+        .from('paper_blacklists')
+        .delete()
+        .eq('id', blacklistId)
+        .eq('user_id', userId);
     return { message: 'ปลดออกจาก Blacklist สำเร็จ' };
+}
+
+/**
+ * ==============================================================================
+ * 4. FETCH PAPER DETAIL FROM GOOGLE SCHOLAR DETAIL PAGE (Puppeteer-based)
+ * ==============================================================================
+ * ดึงข้อมูลเชิงลึก (Abstract, Publication Date, Journal, Authors) 
+ * จาก Google Scholar Detail Page โดยใช้ Puppeteer
+ * ใช้เมื่อผู้ใช้กด "นำไปคำนวณ" เพื่อดึงข้อมูลละเอียดแบบ On-Demand
+ */
+async function fetchPaperDetailFromUrl(detailUrl) {
+    let puppeteer;
+    try {
+        puppeteer = require('puppeteer');
+    } catch (e) {
+        throw new Error('Puppeteer not installed. Run: npm install puppeteer');
+    }
+
+    console.log(`[Paper Detail Scraper] กำลังดึงข้อมูลจาก: ${detailUrl}`);
+
+    let urlEn = detailUrl;
+    if (urlEn.includes('hl=')) {
+      urlEn = urlEn.replace(/hl=[a-zA-Z-]+/, 'hl=en');
+    } else {
+      urlEn = urlEn + '&hl=en';
+    }
+
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+    await delay(Math.floor(Math.random() * 1500) + 1500);
+
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+    const page = await browser.newPage();
+
+    try {
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
+        await page.goto(urlEn, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+        await page.waitForSelector('.gsc_vcd_value', { timeout: 5000 }).catch(() => console.log('[Paper Detail Scraper] Timeout: .gsc_vcd_value not found, proceeding with what we have'));
+
+        const paperDetail = await page.evaluate(() => {
+            const data = {
+                title: '',
+                authors: '',
+                publication_date: '',
+                journal: '',
+                abstract: '',
+                raw_debug: []
+            };
+
+            const fields = document.querySelectorAll('.gsc_vcd_field, .gsc_oci_field');
+            const values = document.querySelectorAll('.gsc_vcd_value, .gsc_oci_value');
+
+            fields.forEach((field, index) => {
+                const labelText = field.innerText.trim();
+                const label = labelText.toLowerCase();
+                const val = values[index] ? values[index].innerText.trim() : '';
+
+                data.raw_debug.push({ label: labelText, value: val });
+
+                if (label === 'authors' || label === 'ผู้เขียน') data.authors = val;
+                if (label === 'publication date' || label === 'วันที่ตีพิมพ์') data.publication_date = val;
+                if (label === 'journal' || label === 'publisher' || label === 'วารสาร' || label === 'สำนักพิมพ์') data.journal = val;
+                if (label === 'description' || label === 'คำอธิบาย') data.abstract = val;
+            });
+
+            if (!data.title) {
+                const titleEl = document.querySelector('#gsc_vcd_title, .gsc_oci_title_wrapper, #gsc_vcd_title_link');
+                if (titleEl) data.title = titleEl.innerText.trim();
+            }
+
+            if (!data.abstract) {
+                const absEl = document.querySelector('.gsc_vcd_description, .gsc_oci_description, blockquote');
+                if (absEl) data.abstract = absEl.innerText.trim();
+            }
+
+            return data;
+        });
+
+        console.log("=== Scraped Detail ===");
+        console.log("Title:", paperDetail.title);
+        console.log("Raw Fields Found:", paperDetail.raw_debug);
+
+        return paperDetail;
+
+    } finally {
+        await browser.close();
+    }
 }
 
 module.exports = {
@@ -655,5 +771,6 @@ module.exports = {
     rejectAndBlacklistPaper,
     getBlacklistByUser,
     unblacklistPaper,
-    isPaperBlacklisted
+    isPaperBlacklisted,
+    fetchPaperDetailFromUrl
 };

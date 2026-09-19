@@ -158,8 +158,14 @@ function AcademicWorkloadMain() {
       detectedAuthorRole = "Co author";
     }
 
-    const authorRaw = paperData.authors_raw || paperData.authors || '';
-    const authorNames = authorRaw.split(',').map(a => a.trim()).filter(Boolean);
+    const authorRaw = paperData.authors_raw || paperData.authors || [];
+
+    // ✅ รองรับทั้ง String (Google Scholar) และ Array (Scopus)
+    const authorList = Array.isArray(authorRaw)
+      ? authorRaw
+      : (typeof authorRaw === 'string' ? authorRaw.split(',') : []);
+
+    const authorNames = authorList.map(a => a.trim()).filter(Boolean);
     const correspondingName = paperData.corresponding_author || paperData.correspondingAuthor || '';
     const mappedAuthorList = authorNames.map((name, i) => ({
       id: Date.now() + i,

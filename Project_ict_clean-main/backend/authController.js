@@ -1,10 +1,20 @@
-
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const db = require('./db');
+const { supabase } = require('./db');
 const { JWT_SECRET } = require('./authMiddleware');
 require('dotenv').config();
+
+// Helper to flatten nested Supabase select results into the original shape
+function flattenUser(user) {
+  if (!user) return null;
+  const { programs, ...rest } = user;
+  return { ...rest, program_name: programs?.[0]?.name || null };
+}
+
+function flattenUsers(users) {
+  return (users || []).map(flattenUser);
+}
 
 // 1. สร้าง URL สำหรับ Redirect ไปหน้าล็อกอินของ Microsoft
 exports.getMicrosoftAuthUrl = (req, res) => {
@@ -56,22 +66,16 @@ exports.handleMicrosoftCallback = async (req, res) => {
     const email = mail || userPrincipalName;
 
     // ตรวจสอบผู้ใช้ในตาราง users หรือสร้างใหม่
-    const [existingUsers] = await db.query('SELECT * FROM users WHERE email = ? OR azure_id = ?', [email, azureId]);
+    const { data: existingUsers } = await supabase.from('users').select('*').or('email.eq.' + email + ',azure_id.eq.' + azureId);
 
     let user;
-    if (existingUsers.length > 0) {
+    if (existingUsers && existingUsers.length > 0) {
       user = existingUsers[0];
-      await db.query(
-        'UPDATE users SET azure_id = ?, full_name = ? WHERE id = ?',
-        [azureId, displayName || user.full_name, user.id]
-      );
+      await supabase.from('users').update({ azure_id: azureId, full_name: displayName || user.full_name }).eq('id', user.id);
     } else {
-      const [insertResult] = await db.query(
-        'INSERT INTO users (azure_id, email, full_name, role) VALUES (?, ?, ?, ?)',
-        [azureId, email, displayName || email, 'user']
-      );
+      const { data: insertResult } = await supabase.from('users').insert({ azure_id: azureId, email, full_name: displayName || email, role: 'user' }).select();
       user = {
-        id: insertResult.insertId,
+        id: insertResult[0].id,
         azure_id: azureId,
         email: email,
         full_name: displayName || email,
@@ -104,19 +108,13 @@ exports.handleMicrosoftCallback = async (req, res) => {
 // 3. ดึงข้อมูลโปรไฟล์ผู้ใช้ปัจจุบัน
 exports.getCurrentUserProfile = async (req, res) => {
   try {
-    const [users] = await db.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.program_id, p.name AS program_name
-       FROM users u
-       LEFT JOIN programs p ON u.program_id = p.id
-       WHERE u.id = ?`,
-      [req.user.id]
-    );
+    const { data: user, error } = await supabase.from('users').select('*, programs(*)').eq('id', req.user.id).single();
 
-    if (users.length === 0) {
+    if (error || !user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    res.json({ success: true, user: users[0] });
+    res.json({ success: true, user: flattenUser(user) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -125,13 +123,9 @@ exports.getCurrentUserProfile = async (req, res) => {
 // 4. ดูรายชื่อผู้ใช้ทั้งหมด (สำหรับ Admin)
 exports.getAllUsers = async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.program_id, p.name AS program_name, u.created_at
-       FROM users u
-       LEFT JOIN programs p ON u.program_id = p.id
-       ORDER BY u.id DESC`
-    );
-    res.json({ success: true, data: rows });
+    const { data: rows, error } = await supabase.from('users').select('*, programs(*)').order('id', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: flattenUsers(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -148,10 +142,8 @@ exports.updateUserRole = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Role ไม่ถูกต้อง' });
     }
 
-    await db.query(
-      'UPDATE users SET role = ?, program_id = ? WHERE id = ?',
-      [role, program_id || null, id]
-    );
+    const { error } = await supabase.from('users').update({ role, program_id: program_id || null }).eq('id', id);
+    if (error) throw error;
 
     res.json({ success: true, message: 'อัปเดตสิทธิ์เรียบร้อยแล้ว' });
   } catch (error) {
@@ -162,7 +154,8 @@ exports.updateUserRole = async (req, res) => {
 // 6. ดึงรายชื่อหลักสูตรทั้งหมด
 exports.getPrograms = async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT * FROM programs ORDER BY id ASC');
+    const { data: rows, error } = await supabase.from('programs').select('*').order('id', { ascending: true });
+    if (error) throw error;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -184,19 +177,11 @@ exports.loginWithEmail = async (req, res) => {
     }
 
     // ค้นหาผู้ใช้จากฐานข้อมูล
-    const [users] = await db.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.program_id, u.password_hash, p.name AS program_name
-       FROM users u
-       LEFT JOIN programs p ON u.program_id = p.id
-       WHERE u.email = ?`,
-      [email.toLowerCase()]
-    );
+    const { data: user, error } = await supabase.from('users').select('*, programs(*)').eq('email', email.toLowerCase()).single();
 
-    if (users.length === 0) {
+    if (error || !user) {
       return res.status(401).json({ success: false, message: 'ไม่พบบัญชีผู้ใช้นี้ในระบบ' });
     }
-
-    const user = users[0];
 
     if (!user.password_hash) {
       return res.status(401).json({ success: false, message: 'บัญชีนี้ยังไม่ได้ตั้งรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบ' });
@@ -230,7 +215,7 @@ exports.loginWithEmail = async (req, res) => {
         full_name: user.full_name,
         role: user.role,
         program_id: user.program_id,
-        program_name: user.program_name,
+        program_name: user.programs?.[0]?.name || null,
       },
     });
   } catch (error) {
@@ -253,22 +238,20 @@ exports.registerUser = async (req, res) => {
     }
 
     // ตรวจสอบว่ามีผู้ใช้อยู่แล้วหรือไม่
-    const [existing] = await db.query('SELECT id FROM users WHERE email = ?', [email.toLowerCase()]);
-    if (existing.length > 0) {
+    const { data: existing, error } = await supabase.from('users').select('id').eq('email', email.toLowerCase());
+    if (existing && existing.length > 0) {
       return res.status(409).json({ success: false, message: 'อีเมลนี้มีในระบบแล้ว' });
     }
 
     const password_hash = await bcrypt.hash(password, 12);
 
-    const [result] = await db.query(
-      'INSERT INTO users (email, full_name, role, program_id, password_hash) VALUES (?, ?, ?, ?, ?)',
-      [email.toLowerCase(), full_name, role || 'user', program_id || null, password_hash]
-    );
+    const { data: result, error: insertError } = await supabase.from('users').insert({ email: email.toLowerCase(), full_name, role: role || 'user', program_id: program_id || null, password_hash }).select();
+    if (insertError) throw insertError;
 
     res.status(201).json({
       success: true,
       message: 'สร้างผู้ใช้เรียบร้อยแล้ว',
-      userId: result.insertId,
+      userId: result[0].id,
     });
   } catch (error) {
     console.error('Register error:', error);

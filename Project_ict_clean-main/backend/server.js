@@ -2,9 +2,12 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
-const pool = require("./db");
+const { supabase, initDatabase } = require("./db");
 const authRoutes = require("./authRoutes");
 const { extractMetadataWithGemini } = require("./llmService");
+const {
+  getPaperDetailsByEid, searchAuthorByName, getAuthorPapers
+} = require("./scopusService");
 const {
   syncAllUsersScholarData,
   syncUserScholarData,
@@ -12,32 +15,26 @@ const {
   getBlacklistByUser,
   unblacklistPaper,
   fetchDirectFromGoogleScholarProfile,
-  savePaperAndAuthor
+  savePaperAndAuthor,
+  fetchPaperDetailFromUrl
 } = require("./scholarService");
 const { initScholarCron, getCronStatus } = require("./cronService");
 require("dotenv").config();
 
 const app = express();
 
-// ตรวจสอบและสร้างไดเรกทอรี uploads/ ในเครื่องเสมอ
 const UPLOADS_DIR = __dirname + "/uploads";
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 app.use(cors());
 app.use(express.json());
 
-// เส้นทางสำหรับ Authentication (Microsoft Login & User Management)
 app.use("/api/auth", authRoutes);
 
-// In-memory lock ป้องกันการซิงก์ Google Scholar ซ้อนกัน
 let isSyncRunning = false;
 
-// Multer memory storage สำหรับรับไฟล์เข้า RAM ก่อนส่งต่อไป MinIO หรือเขียนลง Disk
 const upload = multer({ storage: multer.memoryStorage() });
 
-/* ==========================================
-   ข้อมูลอ้างอิงและเกณฑ์คำนวณภาระงาน (Workload Calculation Engine)
-   ========================================== */
 const NO_DB = "ไม่มีฐานข้อมูล";
 
 const LOOKUP_TABLE = [
@@ -80,14 +77,11 @@ function computeDateInfo(dateStr) {
   const d = new Date(dateStr + "T00:00:00");
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
-  
   const beYear = y + 543;
   const juneStart = new Date(y, 5, 15);
   const acadGregorian = d >= juneStart ? y : y - 1;
-  
   const julyStart = new Date(y, 6, 1);
   const fiscalEndGregorian = d >= julyStart ? y + 1 : y;
-
   return {
     beLabel: `ปี พ.ศ. ${beYear}`,
     acadLabel: `ปีการศึกษา ${acadGregorian + 543}`,
@@ -99,13 +93,8 @@ function computeDateInfo(dateStr) {
 function formatEntry(row) {
   let dateInfo = row.date_info;
   if (typeof dateInfo === "string") {
-    try {
-      dateInfo = JSON.parse(dateInfo);
-    } catch {
-      dateInfo = null;
-    }
+    try { dateInfo = JSON.parse(dateInfo); } catch { dateInfo = null; }
   }
-
   return {
     id: row.id,
     title: row.title || "",
@@ -139,29 +128,27 @@ function formatEntry(row) {
 }
 
 /* ==========================================
-   1. Endpoints สำหรับคำนวณและบันทึกภาระงาน (Workload APIs)
-   ========================================== */
+    1. Endpoints สำหรับคำนวณและบันทึกภาระงาน (Workload APIs)
+    ========================================== */
 
-// 1.1 API คำนวณผลลัพธ์แบบ Live Preview
 app.post("/api/calculate", (req, res) => {
   const { author, type, db: selectedDb, proportion, date, publicationDate } = req.body;
   const lookup = LOOKUP_TABLE.find((r) => r.type === type && r.db === selectedDb);
-  
-  if (!lookup) {
-    return res.json({ success: false, message: "No match found" });
-  }
-
+  if (!lookup) return res.json({ success: false, message: "No match found" });
   const actualHours = Math.round(((Number(proportion) || 0) * lookup.hours) / 100 * 100) / 100;
   const dateInfo = computeDateInfo(publicationDate || date);
   const faculty = calculateFacultyFunding(type, author, lookup.faculty);
-
   res.json({ success: true, data: { ...lookup, faculty, actualHours, dateInfo } });
 });
 
 // 1.2 API ดึงรายการภาระงานทั้งหมด
 app.get("/api/entries", async (req, res) => {
   try {
-    const [rows] = await pool.query("SELECT * FROM entries ORDER BY created_at DESC, id DESC");
+    const { data: rows, error } = await supabase
+      .from("entries")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
     res.json({ success: true, data: rows.map(formatEntry) });
   } catch (error) {
     console.error("Error fetching entries:", error);
@@ -174,78 +161,42 @@ app.post("/api/entries", async (req, res) => {
   try {
     const id = req.body.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const {
-      title,
-      authors,
-      author,
-      authorName,
-      affiliations,
-      correspondingAuthor,
-      publicationDate,
-      doi,
-      journal,
-      volume,
-      issue,
-      abstract,
-      keywords,
-      type,
-      db: selectedDb,
-      proportion,
-      date,
-      code,
-      baseHours,
-      quality,
-      actualHours,
-      faculty,
-      facultyNote,
-      uni,
-      dateInfo
+      title, authors, author, authorName, affiliations, correspondingAuthor,
+      publicationDate, doi, journal, volume, issue, abstract, keywords,
+      type, db: selectedDb, proportion, date, code, baseHours, quality,
+      actualHours, faculty, facultyNote, uni, dateInfo
     } = req.body;
-
     const pubDate = publicationDate || date || null;
 
     if (req.body.id) {
-      await pool.query("DELETE FROM entries WHERE id = ?", [req.body.id]);
+      const { error } = await supabase.from("entries").delete().eq("id", req.body.id);
+      if (error) throw error;
     }
 
-    const sql = `
-      INSERT INTO entries (
-        id, title, authors, author, author_name, affiliations, corresponding_author,
-        publication_date, doi, journal, volume, issue, abstract, keywords,
-        type, db, proportion, date, code,
-        base_hours, quality, actual_hours, faculty, faculty_note, uni, date_info
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+    const entryData = {
+      id, title: title || null, authors: authors || null, author: author || null,
+      author_name: authorName || null, affiliations: affiliations || null,
+      corresponding_author: correspondingAuthor || null, publication_date: pubDate,
+      doi: doi || null, journal: journal || null, volume: volume || null,
+      issue: issue || null, abstract: abstract || null, keywords: keywords || null,
+      type: type || "", db: selectedDb || "",
+      proportion: proportion !== undefined ? Number(proportion) : 100,
+      date: pubDate, code: code || "",
+      base_hours: baseHours !== undefined ? Number(baseHours) : 0,
+      quality: quality !== undefined ? Number(quality) : 0,
+      actual_hours: actualHours !== undefined ? Number(actualHours) : 0,
+      faculty: faculty !== undefined ? Number(faculty) : 0,
+      faculty_note: facultyNote || "",
+      uni: uni !== undefined ? Number(uni) : 0,
+      date_info: dateInfo ? JSON.stringify(dateInfo) : null
+    };
 
-    await pool.query(sql, [
-      id,
-      title || null,
-      authors || null,
-      author || null,
-      authorName || null,
-      affiliations || null,
-      correspondingAuthor || null,
-      pubDate,
-      doi || null,
-      journal || null,
-      volume || null,
-      issue || null,
-      abstract || null,
-      keywords || null,
-      type || "",
-      selectedDb || "",
-      proportion !== undefined ? Number(proportion) : 100,
-      pubDate,
-      code || "",
-      baseHours !== undefined ? Number(baseHours) : 0,
-      quality !== undefined ? Number(quality) : 0,
-      actualHours !== undefined ? Number(actualHours) : 0,
-      faculty !== undefined ? Number(faculty) : 0,
-      facultyNote || "",
-      uni !== undefined ? Number(uni) : 0,
-      dateInfo ? JSON.stringify(dateInfo) : null
-    ]);
+    const { error: insertError } = await supabase.from("entries").insert([entryData]);
+    if (insertError) throw insertError;
 
-    const [rows] = await pool.query("SELECT * FROM entries ORDER BY created_at DESC, id DESC");
+    const { data: rows, error: fetchError } = await supabase
+      .from("entries").select("*").order("created_at", { ascending: false });
+    if (fetchError) throw fetchError;
     res.json({ success: true, data: rows.map(formatEntry) });
   } catch (error) {
     console.error("Error saving entry:", error);
@@ -257,9 +208,9 @@ app.post("/api/entries", async (req, res) => {
 app.delete("/api/entries/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await pool.query("DELETE FROM entries WHERE id = ?", [id]);
-
-    const [rows] = await pool.query("SELECT * FROM entries ORDER BY created_at DESC, id DESC");
+    await supabase.from("entries").delete().eq("id", id);
+    const { data: rows, error } = await supabase.from("entries").select("*").order("created_at", { ascending: false });
+    if (error) throw error;
     res.json({ success: true, data: rows.map(formatEntry) });
   } catch (error) {
     console.error("Error deleting entry:", error);
@@ -268,110 +219,58 @@ app.delete("/api/entries/:id", async (req, res) => {
 });
 
 /* ==========================================
-   2. Endpoints สกัดข้อมูลจาก PDF (Gemini AI Only - GROBID Removed)
-   ========================================== */
+    2. Endpoints สกัดข้อมูลจาก PDF (Gemini AI Only - GROBID Removed)
+    ========================================== */
 
-// 2.1 API สำหรับรับไฟล์ PDF และสกัด Metadata โดยตรงผ่าน Gemini
 app.post("/api/upload", upload.single("pdf_file"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "ไม่พบไฟล์ที่อัปโหลด" });
-  }
-
+  if (!req.file) return res.status(400).json({ error: "ไม่พบไฟล์ที่อัปโหลด" });
   try {
     console.log("[System] กำลังส่งไฟล์ PDF ให้ Gemini สกัด Metadata...");
     const metadata = await extractMetadataWithGemini(req.file.buffer);
-
-    res.json({
-      message: "สกัดข้อมูลสำเร็จ",
-      metadata: metadata
-    });
+    res.json({ message: "สกัดข้อมูลสำเร็จ", metadata });
   } catch (error) {
     console.error("Extract error:", error);
     res.status(500).json({ error: "สกัดข้อมูลไม่สำเร็จ: " + error.message });
   }
 });
 
-// 2.2 API สกัดข้อมูลจาก PDF โดยตรงสำหรับ Modal (PDF -> Form Auto-fill)
 app.post("/api/extract", upload.single("pdf"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "ไม่พบไฟล์ PDF ที่อัปโหลด" });
-  }
-
+  if (!req.file) return res.status(400).json({ error: "ไม่พบไฟล์ PDF ที่อัปโหลด" });
   try {
     console.log("[System] กำลังส่งไฟล์ PDF ให้ Gemini สกัด Metadata...");
     const metadata = await extractMetadataWithGemini(req.file.buffer);
-
-    res.json({
-      success: true,
-      message: "สกัดข้อมูลสำเร็จ",
-      metadata: metadata
-    });
+    res.json({ success: true, message: "สกัดข้อมูลสำเร็จ", metadata });
   } catch (error) {
     console.error("Extract error:", error);
     res.status(500).json({ success: false, error: "สกัดข้อมูลไม่สำเร็จ: " + error.message });
   }
 });
 
-// 2.3 API บันทึกผลงานที่สกัดจาก PDF ลงฐานข้อมูล
 app.post("/api/save", async (req, res) => {
-  const {
-    article_title,
-    publish_date,
-    authors,
-    author_contribution,
-    file_info,
-    doi,
-    journal,
-    publication_level,
-    volume,
-    issue,
-    pages,
-    abstract,
-    keywords,
-    study_design,
-    participants
-  } = req.body;
-
-  if (!article_title) {
-    return res.status(400).json({ error: "ต้องระบุชื่อบทความ" });
-  }
+  const { article_title, publish_date, authors, author_contribution, file_info,
+    doi, journal, publication_level, volume, issue, pages, abstract,
+    keywords, study_design, participants } = req.body;
+  if (!article_title) return res.status(400).json({ error: "ต้องระบุชื่อบทความ" });
 
   try {
-    const [dupCheck] = await pool.query(
-      "SELECT id FROM research_papers WHERE article_title = ? LIMIT 1",
-      [article_title]
-    );
-    if (dupCheck.length > 0) {
+    const { data: dupCheck, error } = await supabase
+      .from("research_papers").select("id").eq("article_title", article_title).limit(1);
+    if (dupCheck && dupCheck.length > 0) {
       return res.status(409).json({ error: "พบบทความชื่อนี้ในระบบแล้ว", existing_id: dupCheck[0].id });
     }
-
-    const [paperResult] = await pool.query(
-      `INSERT INTO research_papers 
-       (article_title, publish_date, authors, author_contribution, file_name, bucket_name,
-        doi, journal, publication_level, volume, issue, pages, abstract, keywords,
-        study_design, participants)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        article_title,
-        publish_date || null,
-        authors ? JSON.stringify(authors) : null,
-        author_contribution || null,
-        file_info?.fileName || null,
-        file_info?.bucket || null,
-        doi || null,
-        journal || null,
-        publication_level || null,
-        volume || null,
-        issue || null,
-        pages || null,
-        abstract || null,
-        keywords || null,
-        study_design || null,
-        participants ? JSON.stringify(participants) : null
-      ]
-    );
-
-    res.json({ message: "บันทึกข้อมูลสำเร็จ", record_id: paperResult.insertId });
+    const { error: insertError } = await supabase.from("research_papers").insert([{
+      article_title, publish_date: publish_date || null,
+      authors: authors ? JSON.stringify(authors) : null,
+      author_contribution: author_contribution || null,
+      file_name: file_info?.fileName || null, bucket_name: file_info?.bucket || null,
+      doi: doi || null, journal: journal || null, publication_level: publication_level || null,
+      volume: volume || null, issue: issue || null, pages: pages || null,
+      abstract: abstract || null, keywords: keywords || null,
+      study_design: study_design || null,
+      participants: participants ? JSON.stringify(participants) : null
+    }]);
+    if (insertError) throw insertError;
+    res.json({ message: "บันทึกข้อมูลสำเร็จ" });
   } catch (error) {
     console.error("[DB Save Error]:", error);
     res.status(500).json({ error: "บันทึกข้อมูลไม่สำเร็จ: " + error.message });
@@ -379,15 +278,17 @@ app.post("/api/save", async (req, res) => {
 });
 
 /* ==========================================
-   3. Endpoints ระบบบุคลากร & Google Scholar
-   ========================================== */
+    3. Endpoints ระบบบุคลากร & Google Scholar
+    ========================================== */
 
 // 3.1 ดึงรายชื่ออาจารย์ทั้งหมดในระบบ
 app.get("/api/users", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT id, email, full_name, name_en, name_th, department, position, scholar_id, scopus_id FROM users ORDER BY department ASC, id ASC"
-    );
+    const { data: rows, error } = await supabase
+      .from("users")
+      .select("id, email, full_name, name_en, name_th, department, position, scholar_id, scopus_id")
+      .order("department", { ascending: true }).order("id", { ascending: true });
+    if (error) throw error;
     res.json(rows);
   } catch (error) {
     console.error("[Get Users Error]:", error);
@@ -402,18 +303,13 @@ app.put("/api/users/:userId/scholar-id", async (req, res) => {
   try {
     const cleanedScholarId = scholarId ? scholarId.trim() : null;
     const cleanedScopusId = scopusId ? scopusId.trim() : null;
-
-    await pool.query(
-      `UPDATE users 
-       SET scholar_id = ?, scopus_id = ?, position = COALESCE(?, position)
-       WHERE id = ?`,
-      [cleanedScholarId, cleanedScopusId, position || null, userId]
-    );
-
-    const [rows] = await pool.query(
-      "SELECT id, email, full_name, name_en, name_th, department, position, scholar_id, scopus_id FROM users WHERE id = ?",
-      [userId]
-    );
+    const updateData = { scholar_id: cleanedScholarId, scopus_id: cleanedScopusId };
+    if (position) updateData.position = position;
+    await supabase.from("users").update(updateData).eq("id", userId);
+    const { data: rows, error } = await supabase
+      .from("users").select("id, email, full_name, name_en, name_th, department, position, scholar_id, scopus_id")
+      .eq("id", userId).limit(1);
+    if (error) throw error;
     res.json({ message: "บันทึกข้อมูลสำเร็จ", user: rows[0] });
   } catch (error) {
     console.error("[Update Scholar ID Error]:", error);
@@ -425,43 +321,67 @@ app.put("/api/users/:userId/scholar-id", async (req, res) => {
 app.get("/api/users/:userId/papers", async (req, res) => {
   const { userId } = req.params;
   try {
-    const query = `
-      SELECT 
-        p.id AS paper_id,
-        p.title,
-        p.publish_year,
-        p.authors_raw,
-        p.cited_by,
-        p.scholar_url,
-        p.source,
-        p.status AS paper_status,
-        pa.id AS author_entry_id,
-        pa.contribution_percent,
-        pa.is_first_author,
-        pa.is_co_first_author,
-        pa.is_corresponding,
-        pa.is_co_corresponding,
-        pa.status AS author_status,
-        pa.confirmed_at
-      FROM papers p
-      JOIN paper_authors pa ON p.id = pa.paper_id
-      WHERE pa.user_id = ?
-      ORDER BY 
-        (CASE WHEN pa.status = 'PENDING' THEN 0 ELSE 1 END),
-        ISNULL(p.publish_year), p.publish_year DESC, 
-        p.id DESC
-    `;
-    const [rows] = await pool.query(query, [userId]);
-    
-    // แปลงค่า Boolean TINYINT(1) ให้เป็น JavaScript boolean แท้ เพื่อป้องกัน Gotcha
-    const formattedRows = rows.map(r => ({
-      ...r,
-      is_first_author: Boolean(r.is_first_author),
-      is_co_first_author: Boolean(r.is_co_first_author),
-      is_corresponding: Boolean(r.is_corresponding),
-      is_co_corresponding: Boolean(r.is_co_corresponding),
-      contribution_percent: Number(r.contribution_percent) || 0
-    }));
+    const { data: rows, error } = await supabase
+      .from("papers")
+      .select(`
+        paper_id:id,
+        title,
+        publish_year,
+        authors_raw,
+        cited_by,
+        scholar_url,
+        source,
+        paper_status:status,
+        paper_authors (
+          author_entry_id:id,
+          contribution_percent,
+          is_first_author,
+          is_co_first_author,
+          is_corresponding,
+          is_co_corresponding,
+          author_status:status,
+          confirmed_at
+        )
+      `)
+      .eq("paper_authors.user_id", userId);
+
+    if (error) throw error;
+
+    // Flatten nested data
+    const formattedRows = [];
+    for (const paper of (rows || [])) {
+      const authors = paper.paper_authors || [];
+      for (const pa of authors) {
+        formattedRows.push({
+          paper_id: paper.paper_id,
+          title: paper.title,
+          publish_year: paper.publish_year,
+          authors_raw: paper.authors_raw,
+          cited_by: paper.cited_by,
+          scholar_url: paper.scholar_url,
+          source: paper.source,
+          status: paper.paper_status,
+          author_entry_id: pa.author_entry_id,
+          contribution_percent: Number(pa.contribution_percent) || 0,
+          is_first_author: Boolean(pa.is_first_author),
+          is_co_first_author: Boolean(pa.is_co_first_author),
+          is_corresponding: Boolean(pa.is_corresponding),
+          is_co_corresponding: Boolean(pa.is_co_corresponding),
+          author_status: pa.author_status,
+          confirmed_at: pa.confirmed_at,
+        });
+      }
+    }
+    // Sort: PENDING first, then by year desc
+    formattedRows.sort((a, b) => {
+      const orderA = a.author_status === 'PENDING' ? 0 : 1;
+      const orderB = b.author_status === 'PENDING' ? 0 : 1;
+      if (orderA !== orderB) return orderA - orderB;
+      const yearA = a.publish_year || 0;
+      const yearB = b.publish_year || 0;
+      if (yearA !== yearB) return yearB - yearA;
+      return b.paper_id - a.paper_id;
+    });
 
     res.json(formattedRows);
   } catch (error) {
@@ -473,28 +393,14 @@ app.get("/api/users/:userId/papers", async (req, res) => {
 // 3.4 สั่ง Sync Google Scholar ข้อมูลอาจารย์ทั้งหมด
 app.post("/api/sync-scholar", async (req, res) => {
   if (isSyncRunning) {
-    return res.status(409).json({
-      error: "Sync already in progress",
-      message: "กำลังมีการประมวลผลดึงข้อมูล กรุณารอสักครู่"
-    });
+    return res.status(409).json({ error: "Sync already in progress", message: "กำลังมีการประมวลผลดึงข้อมูล กรุณารอสักครู่" });
   }
-
   isSyncRunning = true;
   const startTime = Date.now();
-
   try {
     const result = await syncAllUsersScholarData();
     const duration = Date.now() - startTime;
-
-    res.json({
-      message: "Sync completed",
-      durationMs: duration,
-      stats: {
-        createdCount: result.createdCount,
-        linkedCount: result.linkedCount,
-        errors: result.errors
-      }
-    });
+    res.json({ message: "Sync completed", durationMs: duration, stats: { createdCount: result.createdCount, linkedCount: result.linkedCount, errors: result.errors } });
   } catch (error) {
     console.error("[Sync Scholar Error]:", error);
     res.status(500).json({ error: "Sync failed", details: error.message });
@@ -503,63 +409,51 @@ app.post("/api/sync-scholar", async (req, res) => {
   }
 });
 
-// 3.5 สั่ง Sync Google Scholar ข้อมูลอาจารย์รายบุคคล
 app.post("/api/sync-scholar/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
     const result = await syncUserScholarData(userId);
-    res.json({
-      message: `Sync completed for user ${userId}`,
-      data: result
-    });
+    res.json({ message: `Sync completed for user ${userId}`, data: result });
   } catch (error) {
     console.error(`[Sync Scholar User ${userId} Error]:`, error);
     res.status(500).json({ error: "Sync user failed", details: error.message });
   }
 });
 
-// 3.5.1 Direct Puppeteer scrape Google Scholar Profile (สำหรับผู้ที่มี scholar_id แต่ไม่มี SerpApi)
 app.post("/api/scrape-scholar/:userId", async (req, res) => {
   const { userId } = req.params;
   try {
-    const [users] = await pool.query('SELECT scholar_id FROM users WHERE id = ?', [userId]);
-    if (users.length === 0) {
-      return res.status(404).json({ error: "ไม่พบผู้ใช้" });
-    }
+    const { data: users, error } = await supabase.from("users").select("scholar_id").eq("id", userId).limit(1);
+    if (error) throw error;
+    if (!users || users.length === 0) return res.status(404).json({ error: "ไม่พบผู้ใช้" });
     const scholarId = users[0].scholar_id;
-    if (!scholarId) {
-      return res.status(400).json({ error: "ผู้ใช้นี้ยังไม่ได้ตั้งค่า Google Scholar ID" });
-    }
-
+    if (!scholarId) return res.status(400).json({ error: "ผู้ใช้นี้ยังไม่ได้ตั้งค่า Google Scholar ID" });
     console.log(`[Scrape Scholar] เริ่มดึงข้อมูลโดยตรงจาก Google Scholar Profile: ${scholarId}`);
     const papers = await fetchDirectFromGoogleScholarProfile(scholarId);
-    
-    // บันทึกผลงานที่ดึงมา
-    let createdCount = 0;
-    let linkedCount = 0;
+    let createdCount = 0, linkedCount = 0;
     for (const paper of papers) {
       try {
-        const res = await savePaperAndAuthor(userId, paper);
-        if (res) {
-          linkedCount++;
-          if (res.isNewPaper) createdCount++;
-        }
-      } catch (saveErr) {
-        console.error(`[Save Paper Error] ${paper.title}:`, saveErr.message);
-      }
+        const r = await savePaperAndAuthor(userId, paper);
+        if (r) { linkedCount++; if (r.isNewPaper) createdCount++; }
+      } catch (saveErr) { console.error(`[Save Paper Error] ${paper.title}:`, saveErr.message); }
     }
-
-    res.json({
-      message: `Direct scrape completed for user ${userId}`,
-      stats: {
-        totalFetched: papers.length,
-        createdCount,
-        linkedCount
-      }
-    });
+    res.json({ message: `Direct scrape completed for user ${userId}`, stats: { totalFetched: papers.length, createdCount, linkedCount } });
   } catch (error) {
     console.error(`[Scrape Scholar User ${userId} Error]:`, error);
     res.status(500).json({ error: "Direct scrape failed", details: error.message });
+  }
+});
+
+// 3.5.2 ดึงข้อมูลละเอียดเปเปอร์จาก Google Scholar Detail Page (On-Demand)
+app.post("/api/scholar/paper-detail", async (req, res) => {
+  const { detailUrl } = req.body;
+  if (!detailUrl) return res.status(400).json({ error: 'Missing detailUrl' });
+  try {
+    const detail = await fetchPaperDetailFromUrl(detailUrl);
+    res.json(detail);
+  } catch (error) {
+    console.error("[Paper Detail Error]:", error.message);
+    res.status(500).json({ error: 'Failed to fetch details' });
   }
 });
 
@@ -567,61 +461,32 @@ app.post("/api/scrape-scholar/:userId", async (req, res) => {
 app.put("/api/papers/:paperId/confirm", async (req, res) => {
   const { paperId } = req.params;
   const { userId, contributionPercent, isFirstAuthor, isCorresponding } = req.body;
-
-  if (!userId) {
-    return res.status(400).json({ error: "ต้องระบุ userId" });
-  }
-
+  if (!userId) return res.status(400).json({ error: "ต้องระบุ userId" });
   const percent = parseFloat(contributionPercent) || 0;
-  if (percent < 0 || percent > 100) {
-    return res.status(400).json({ error: "สัดส่วนภาระงานต้องอยู่ระหว่าง 0% ถึง 100%" });
-  }
+  if (percent < 0 || percent > 100) return res.status(400).json({ error: "สัดส่วนภาระงานต้องอยู่ระหว่าง 0% ถึง 100%" });
 
   try {
-    await pool.query(
-      `UPDATE paper_authors 
-       SET contribution_percent = ?,
-           is_first_author = COALESCE(?, is_first_author),
-           is_corresponding = COALESCE(?, is_corresponding),
-           status = 'CONFIRMED',
-           confirmed_at = CURRENT_TIMESTAMP
-       WHERE paper_id = ? AND user_id = ?`,
-      [
-        percent,
-        isFirstAuthor !== undefined ? (isFirstAuthor ? 1 : 0) : null,
-        isCorresponding !== undefined ? (isCorresponding ? 1 : 0) : null,
-        paperId,
-        userId
-      ]
-    );
+    const updateData = { contribution_percent: percent };
+    if (isFirstAuthor !== undefined) updateData.is_first_author = isFirstAuthor ? 1 : 0;
+    if (isCorresponding !== undefined) updateData.is_corresponding = isCorresponding ? 1 : 0;
+    await supabase.from("paper_authors").update(updateData)
+      .eq("paper_id", paperId).eq("user_id", userId);
 
-    // ตรวจสอบภาพรวมสัดส่วน
-    const [statRes] = await pool.query(
-      `SELECT 
-         COALESCE(SUM(contribution_percent), 0) AS total_percent,
-         COUNT(*) AS total_authors,
-         COUNT(CASE WHEN status = 'CONFIRMED' THEN 1 END) AS confirmed_authors
-       FROM paper_authors 
-       WHERE paper_id = ?`,
-      [paperId]
-    );
+    const { data: statRows, error: statError } = await supabase
+      .from("paper_authors").select("contribution_percent, status")
+      .eq("paper_id", paperId);
+    if (statError) throw statError;
 
-    const { total_percent, total_authors, confirmed_authors } = statRes[0];
+    const total_percent = statRows.reduce((sum, r) => sum + (Number(r.contribution_percent) || 0), 0);
+    const total_authors = statRows.length;
+    const confirmed_authors = statRows.filter(r => r.status === 'CONFIRMED').length;
+
     let newPaperStatus = null;
-
-    if (parseFloat(total_percent) >= 100 || parseInt(total_authors, 10) === parseInt(confirmed_authors, 10)) {
+    if (total_percent >= 100 || total_authors === confirmed_authors) {
       newPaperStatus = "COMPLETED";
-      await pool.query(
-        "UPDATE papers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [newPaperStatus, paperId]
-      );
+      await supabase.from("papers").update({ status: newPaperStatus, updated_at: new Date().toISOString() }).eq("id", paperId);
     }
-
-    res.json({
-      message: "ยืนยันข้อมูลเรียบร้อยแล้ว",
-      paperStatus: newPaperStatus || "PENDING_CO_AUTHOR",
-      totalPercent: parseFloat(total_percent)
-    });
+    res.json({ message: "ยืนยันข้อมูลเรียบร้อยแล้ว", paperStatus: newPaperStatus || "PENDING_CO_AUTHOR", totalPercent: parseFloat(total_percent) });
   } catch (error) {
     console.error("[Confirm Paper Error]:", error);
     res.status(500).json({ error: "ยืนยันข้อมูลไม่สำเร็จ", details: error.message });
@@ -631,10 +496,7 @@ app.put("/api/papers/:paperId/confirm", async (req, res) => {
 // 3.7 ปฏิเสธผลงาน ("ไม่ใช่ผลงานของฉัน" -> Blacklist)
 app.post("/api/papers/reject", async (req, res) => {
   const { userId, scholarTitle, paperId } = req.body;
-  if (!userId || !scholarTitle) {
-    return res.status(400).json({ error: "ต้องระบุ userId และ scholarTitle" });
-  }
-
+  if (!userId || !scholarTitle) return res.status(400).json({ error: "ต้องระบุ userId และ scholarTitle" });
   try {
     const result = await rejectAndBlacklistPaper(userId, scholarTitle, paperId);
     res.json(result);
@@ -644,9 +506,39 @@ app.post("/api/papers/reject", async (req, res) => {
   }
 });
 
-// 3.8 สถานะ Cron Job
-app.get("/api/cron/status", (req, res) => {
-  res.json(getCronStatus());
+app.get("/api/cron/status", (req, res) => { res.json(getCronStatus()); });
+
+// Scopus API - ดึงข้อมูลเปเปอร์ฉบับเต็มด้วย EID
+app.get("/api/scopus/paper/:eid", async (req, res) => {
+  try {
+    const { eid } = req.params;
+    const paperData = await getPaperDetailsByEid(eid);
+    res.json(paperData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Scopus API - ค้นหาอาจารย์โดยชื่อ
+app.get("/api/scopus/authors/:name", async (req, res) => {
+  try {
+    const { name } = req.params;
+    const authors = await searchAuthorByName(name);
+    res.json(authors);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Scopus API - ดึงรายการเปเปอร์ทั้งหมดของอาจารย์
+app.get("/api/scopus/author-papers/:authorId", async (req, res) => {
+  try {
+    const { authorId } = req.params;
+    const papers = await getAuthorPapers(authorId);
+    res.json(papers);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
@@ -657,4 +549,5 @@ app.listen(PORT, () => {
   console.log(`📂 Uploads dir: ${UPLOADS_DIR}`);
   console.log(`=======================================================`);
   initScholarCron();
+  initDatabase();
 });
