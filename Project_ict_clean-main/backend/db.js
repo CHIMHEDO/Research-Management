@@ -243,6 +243,16 @@ async function initDatabase() {
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    
+    // 4.1 เพิ่ม UNIQUE Constraint ให้ตาราง papers เพื่อป้องกันข้อมูลซ้ำ
+    try {
+      await conn.query(`
+        ALTER TABLE papers ADD CONSTRAINT unique_paper_title_publish_year UNIQUE (title, publish_year)
+      `);
+    } catch (e) {
+      // Constraint อาจมีอยู่แล้วจาการรันก่อนหน้า
+      console.log('[DB] unique_paper_title_publish_year constraint may already exist');
+    }
 
     // 5. ตาราง paper_authors (Co-author & Contribution allocation)
     await conn.query(`

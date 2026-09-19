@@ -6,7 +6,7 @@ console.log('[LLM] GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? "✓ โหล
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const MODEL_PRIMARY = "gemini-3.6-flash";
-const MODEL_FALLBACK = "gemini-1.5-pro";
+const MODEL_FALLBACK = "gemini-2.5-flash";
 
 async function callModelWithFallback(prompt, responseSchema = null) {
     const models = [MODEL_PRIMARY, MODEL_FALLBACK];
@@ -145,23 +145,35 @@ ${pdfBase64}
 
 จงคืนค่าคำตอบเป็น JSON เท่านั้น ตามโครงสร้างข้างต้น ห้ามมี markdown หรือ explanation`;
 
+    let result;
     try {
         const model = genAI.getGenerativeModel({ 
             model: MODEL_PRIMARY,
             generationConfig: { responseMimeType: "application/json", responseSchema }
         });
 
-        console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล...');
-        const result = await model.generateContent([filePart, prompt]);
-        const responseText = result.response.text();
-        
-        console.log('[Gemini Extract] ✓ Gemini ตอบกลับ:', responseText.substring(0, 200));
-        
-        return JSON.parse(responseText);
+        console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลหลัก)...');
+        result = await model.generateContent([filePart, prompt]);
     } catch (error) {
-        console.error('[Gemini Extract Error]:', error.message);
-        throw error;
+        console.warn(`[Gemini Extract] โมเดลหลัก ${MODEL_PRIMARY} ล่ม (${error.status})... สลับไปใช้โมเดลสำรอง: ${MODEL_FALLBACK}`);
+        try {
+            const fallbackModel = genAI.getGenerativeModel({ 
+                model: MODEL_FALLBACK,
+                generationConfig: { responseMimeType: "application/json", responseSchema }
+            });
+            console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลสำรอง)...');
+            result = await fallbackModel.generateContent([filePart, prompt]);
+        } catch (fallbackError) {
+            console.error('[Gemini Extract Error]: โมเดลสำรองก็ล่มเช่นกัน:', fallbackError.message);
+            throw fallbackError;
+        }
     }
+
+    const responseText = result.response.text();
+    
+    console.log('[Gemini Extract] ✓ Gemini ตอบกลับ:', responseText.substring(0, 200));
+    
+    return JSON.parse(responseText);
 }
 
 async function refineMetadataWithLLM(xmlData, grobidData) {
