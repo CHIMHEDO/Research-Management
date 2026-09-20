@@ -146,10 +146,11 @@ function formatEntry(row) {
     ========================================== */
 
 app.post("/api/calculate", (req, res) => {
-  const { author, type, db: selectedDb, proportion, date, publicationDate } = req.body;
+  const { author, type, db: selectedDb, proportion, date, publicationDate, authorList } = req.body;
   const lookup = LOOKUP_TABLE.find((r) => r.type === type && r.db === selectedDb);
   if (!lookup) return res.json({ success: false, message: "No match found" });
-  const actualHours = Math.round(((Number(proportion) || 0) * lookup.hours) / 100 * 100) / 100;
+  const userProportion = Number(authorList?.[0]?.proportion || 0);
+  const actualHours = Math.round((userProportion * lookup.hours) / 100 * 100) / 100;
   const dateInfo = computeDateInfo(publicationDate || date);
   const faculty = calculateFacultyFunding(type, author, lookup.faculty);
   res.json({ success: true, data: { ...lookup, faculty, actualHours, dateInfo } });
@@ -307,6 +308,21 @@ app.get("/api/users", async (req, res) => {
   } catch (error) {
     console.error("[Get Users Error]:", error);
     res.status(500).json({ error: "ดึงรายชื่อผู้ใช้ไม่สำเร็จ: " + error.message });
+  }
+});
+
+// 3.1a ดึงรายชื่ออาจารย์สำหรับ Auto-Mapping Affiliation
+app.get("/api/users/staff", async (req, res) => {
+  try {
+    const { data: rows, error } = await supabase
+      .from("users")
+      .select("name_en, name_th, full_name, email, department")
+      .order("name_en", { ascending: true });
+    if (error) throw error;
+    res.json(rows || []);
+  } catch (error) {
+    console.error("[Get Staff Error]:", error);
+    res.status(500).json({ error: "ดึงรายชื่ออาจารย์ไม่สำเร็จ: " + error.message });
   }
 });
 

@@ -706,51 +706,208 @@ async function fetchPaperDetailFromUrl(detailUrl) {
 
     try {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
-        await page.goto(urlEn, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto(urlEn, { waitUntil: 'networkidle2', timeout: 30000 });
 
-        await page.waitForSelector('.gsc_vcd_value', { timeout: 5000 }).catch(() => console.log('[Paper Detail Scraper] Timeout: .gsc_vcd_value not found, proceeding with what we have'));
+        await delay(2000);
 
         const paperDetail = await page.evaluate(() => {
             const data = {
                 title: '',
                 authors: '',
-                publication_date: '',
+                publicationDate: '',
                 journal: '',
                 abstract: '',
+                doi: '',
+                volume: '',
+                issue: '',
+                keywords: '',
+                year: '',
                 raw_debug: []
             };
 
+            // Method 1: Extract from meta tags (citation_* for Google Scholar detail pages)
+            const metaSelectors = [
+                { prop: 'title', selector: 'meta[property="og:title"]' },
+                { prop: 'title', selector: 'meta[name="citation_title"]' },
+                { prop: 'journal', selector: 'meta[name="citation_journal"]' },
+                { prop: 'journal', selector: 'meta[name="citation_journal_title"]' },
+                { prop: 'doi', selector: 'meta[name="citation_doi"]' },
+                { prop: 'authors', selector: 'meta[name="citation_author"]' },
+                { prop: 'publicationDate', selector: 'meta[name="citation_publication_date"]' },
+                { prop: 'publicationDate', selector: 'meta[name="citation_date"]' },
+                { prop: 'abstract', selector: 'meta[name="citation_abstract"]' },
+                { prop: 'keywords', selector: 'meta[name="citation_keywords"]' },
+                { prop: 'volume', selector: 'meta[name="citation_volume"]' },
+                { prop: 'issue', selector: 'meta[name="citation_issue"]' },
+            ];
+
+            metaSelectors.forEach(({ prop, selector }) => {
+                const el = document.querySelector(selector);
+                if (el && el.getAttribute('content')) {
+                    if (prop === 'authors' && data.authors) {
+                        const existingAuthors = data.authors;
+                        data.authors = existingAuthors ? existingAuthors + ', ' + el.getAttribute('content') : el.getAttribute('content');
+                    } else if (!data[prop]) {
+                        data[prop] = el.getAttribute('content').trim();
+                    }
+                }
+            });
+
+            // Method 2: Extract from .gsc_vcd_field layout
             const fields = document.querySelectorAll('.gsc_vcd_field, .gsc_oci_field');
             const values = document.querySelectorAll('.gsc_vcd_value, .gsc_oci_value');
 
             fields.forEach((field, index) => {
-                const labelText = field.innerText.trim();
+                const labelText = (field.textContent || '').trim();
+                const valText = values[index] ? (values[index].textContent || '').trim() : '';
+                data.raw_debug.push({ label: labelText, value: valText });
+
                 const label = labelText.toLowerCase();
-                const val = values[index] ? values[index].innerText.trim() : '';
-
-                data.raw_debug.push({ label: labelText, value: val });
-
-                if (label === 'authors' || label === 'ผู้เขียน') data.authors = val;
-                if (label === 'publication date' || label === 'วันที่ตีพิมพ์') data.publication_date = val;
-                if (label === 'journal' || label === 'publisher' || label === 'วารสาร' || label === 'สำนักพิมพ์') data.journal = val;
-                if (label === 'description' || label === 'คำอธิบาย') data.abstract = val;
+                if (label.includes('author') || label.includes('\u0e16\u0e35\u0e19\u0e01\u0e31\u0e19')) data.authors = valText || data.authors;
+                if (label.includes('publication date') || label.includes('\u0e27\u0e31\u0e19\u0e19\u0e31\u0e49\u0e21\u0e17\u0e35')) data.publicationDate = valText;
+                if (label.includes('journal') || label.includes('\u0e27\u0e31\u0e19\u0e23\u0e31\u0e1a')) {
+      data.journal = valText || data.journal; // Priority 1: Journal
+    } else if (!data.journal && (label.includes('publisher') || label.includes('\u0e2a\u0e19\u0e38\u0e13\u0e23\u0e31\u0e1a'))) {
+      data.journal = valText || data.journal; // Priority 2: Publisher fallback
+    }
+                if (label.includes('description') || label.includes('\u0e1e\u0e38\u0e15\u0e02\u0e2d\u0e07') || label.includes('abstract')) data.abstract = valText || data.abstract;
+                if (label.includes('volume') || label.includes('\u0e48\u0e21')) data.volume = valText;
+                if (label.includes('issue') || label.includes('\u0e2a\u0e21')) data.issue = valText;
             });
 
+            // Method 3: Title from dedicated title elements
             if (!data.title) {
-                const titleEl = document.querySelector('#gsc_vcd_title, .gsc_oci_title_wrapper, #gsc_vcd_title_link');
-                if (titleEl) data.title = titleEl.innerText.trim();
+                const titleSelectors = [
+                    '#gsc_vcd_title a', '#gsc_vcd_title',
+                    '.gs_rt a', '.gs_rt', '.gsc_vcd_title_link',
+                    '.gsc_oci_title_link', '.gsc_vcd_title_wrapper a',
+                    '#gsc_vpf_title a', '#gsc_vpf_title',
+                    '.gs-sci-title a', '.gs-sci-title',
+                ];
+                for (const selector of titleSelectors) {
+                    const titleEl = document.querySelector(selector);
+                    if (titleEl) { data.title = titleEl.innerText.trim(); break; }
+                }
             }
 
+            // Method 4: Title from "Scholar articles" field text parsing
+            if (!data.title && fields.length > 0) {
+                const scholarArticlesField = Array.from(fields).find(f => {
+                    const label = (f.textContent || '').trim().toLowerCase();
+                    return label.includes('scholar articles') || label.includes('\u0e27\u0e31\u0e19\u0e1a\u0e31\u0e15\u0e32\u0e23\u0e02\u0e2d\u0e07\u0e40\u0e02\u0e49\u0e32');
+                });
+                if (scholarArticlesField) {
+                    const text = scholarArticlesField.textContent;
+                    const lines = text.split('\n');
+                    if (lines.length > 1) { data.title = lines[lines.length - 1].trim(); }
+                }
+            }
+
+            // Method 5: Abstract from dedicated description elements
             if (!data.abstract) {
-                const absEl = document.querySelector('.gsc_vcd_description, .gsc_oci_description, blockquote');
+                const absEl = document.querySelector('.gsc_vcd_description, .gsc_oci_description, .gsc_vcd_text_excerpt, #gsc_vcd_abstract, #gsc_oci_abstract, #gsc_vcd_descr, #gsc_oci_descr');
                 if (absEl) data.abstract = absEl.innerText.trim();
             }
 
-            return data;
+            // Method 6: Keywords from dedicated elements
+            if (!data.keywords) {
+                const kwEl = document.querySelector('.gsc_vcd_keywords, .gsc_oci_keywords, .gs-flat');
+                if (kwEl) data.keywords = kwEl.innerText.trim();
+            }
+
+            // Method 7: Publication date from URL or citation date meta
+            if (!data.publicationDate) {
+                const dateText = document.body.innerText.match(/published\s+in\s+(\d{4})/i);
+                if (dateText) data.publicationDate = dateText[1];
+            }
+            if (!data.publicationDate) {
+                const dateTextTh = document.body.innerText.match(/เผยแพร่\s*เมื่อ\s*(\d{1,2}\s+\w+\s+\d{4})/i);
+                if (dateTextTh) data.publicationDate = dateTextTh[1];
+            }
+
+            // Method 8: Year from page URL or title
+            if (!data.year) {
+                const yearMatch = document.body.innerText.match(/(\b19\d{2}\b|\b20\d{2}\b)\s*[-–]\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)/i);
+                if (yearMatch) data.year = yearMatch[1];
+            }
+
+            // ==========================================
+            // Extract key fields for separate assignment
+            // ==========================================
+            let extDate = "";
+            let extJournal = "";
+            let extDoi = "";
+
+            try {
+                for (let i = 0; i < fields.length; i++) {
+                    const fieldName = (fields[i].textContent || '').toLowerCase().trim();
+                    const valueText = values[i] ? (values[i].textContent || '').trim() : '';
+
+                    if (fieldName.includes('publication date') || fieldName === 'date' || fieldName.includes('วันที่เผยแพร่') || fieldName.includes('วันที่ตีพิมพ์')) {
+                        extDate = valueText;
+                    }
+                    if (fieldName === 'journal' || fieldName.includes('วารสาร')) {
+                        extJournal = valueText; // Priority 1: เจอชื่อ Journal ให้ใช้เลย
+                    } else if (!extJournal && (fieldName === 'publisher' || fieldName === 'source' || fieldName === 'conference' || fieldName.includes('ผู้เผยแพร่') || fieldName.includes('แหล่งตีพิมพ์'))) {
+                        extJournal = valueText; // Priority 2: ถ้ายังว่าง ค่อยเอา Publisher มาใส่
+                    }
+                }
+
+                const doiLinks = document.querySelectorAll('.gsc_vcd_value a, .gsc_oci_value a');
+                for (let i = 0; i < doiLinks.length; i++) {
+                    const href = doiLinks[i].getAttribute('href');
+                    if (href && typeof href === 'string' && href.includes('doi.org/')) {
+                        const parts = href.split('doi.org/');
+                        if (parts.length > 1) {
+                            extDoi = parts[1].trim().split('?')[0];
+                            break;
+                        }
+                    }
+                }
+
+                if (!extDoi) {
+                    const tableContainer = document.querySelector('#gsc_vcd_table, #gsc_oci_table');
+                    if (tableContainer) {
+                        const match = tableContainer.textContent.match(/10\.\d{4,9}\/[-._;()/:a-zA-Z0-9]+/i);
+                        if (match) { extDoi = match[0].trim(); }
+                    }
+                }
+            } catch (err) {
+                // Silent catch
+            }
+
+            // Convert date format from 2026/6/3 to 2026-06-03
+            if (extDate && extDate.includes('/')) {
+              const parts = extDate.split('/');
+              if (parts.length === 3) {
+                const y = parts[0];
+                const m = String(parts[1]).padStart(2, '0');
+                const d = String(parts[2]).padStart(2, '0');
+                extDate = `${y}-${m}-${d}`;
+              }
+            } else if (extDate && extDate.length === 4) {
+              extDate = `${extDate}-01-01`;
+            }
+
+            return {
+                ...data,
+                extractedDate: extDate,
+                extractedJournal: extJournal,
+                extractedDoi: extDoi
+            };
         });
+
+        // Assign extracted fields from page.evaluate result
+        paperDetail.publicationDate = paperDetail.extractedDate || paperDetail.publicationDate || paperDetail.year || "";
+        paperDetail.journal = paperDetail.extractedJournal || paperDetail.journal || "";
+        paperDetail.doi = paperDetail.extractedDoi || paperDetail.doi || "";
+
 
         console.log("=== Scraped Detail ===");
         console.log("Title:", paperDetail.title);
+        console.log("Journal:", paperDetail.journal);
+        console.log("DOI:", paperDetail.doi);
+        console.log("Abstract length:", paperDetail.abstract.length);
         console.log("Raw Fields Found:", paperDetail.raw_debug);
 
         return paperDetail;

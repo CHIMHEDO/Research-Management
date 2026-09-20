@@ -123,11 +123,24 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
       if (paper.scholar_url) {
         setFetchingDetail(true);
         try {
-          const res = await api.post('/api/scholar/paper-detail', {
+          const res = await api.post('/scholar/paper-detail', {
             detailUrl: paper.scholar_url
           });
           const detail = res.data;
-          const mergedPaper = { ...paper, ...detail };
+          // Smart merge: only override paper fields with non-empty detail values
+          const mergedPaper = {
+            ...paper,
+            ...detail,
+            title: detail.title || paper.title || '',
+            authors_raw: detail.authors || paper.authors_raw || '',
+            journal: detail.journal || paper.journal || '',
+            doi: detail.doi || paper.doi || '',
+            abstract: detail.abstract || paper.abstract || '',
+            volume: detail.volume || paper.volume || '',
+            issue: detail.issue || paper.issue || '',
+            publicationDate: detail.publication_date || paper.publicationDate || paper.publish_year || '',
+            keywords: detail.keywords || paper.keywords || '',
+          };
           onSelectPaper(mergedPaper, currentUserObj);
         } catch (err) {
           console.error('Failed to fetch paper detail:', err);
@@ -192,6 +205,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
         journal: detail.journal || '',
         abstract: detail.abstract || '',
         doi: detail.doi || '',
+        keywords: detail.keywords || [],  // 🌟 ADD: Include keywords from Scopus detail API
         scholar_url: `https://www.scopus.com/abstract/uri/eid/${paper.eid}`
       };
       onSelectPaper(mergedPaper, currentUserObj);

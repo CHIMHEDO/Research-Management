@@ -108,9 +108,10 @@ function AcademicWorkloadMain() {
   const [tab, setTab] = useState("form");
   const [form, setForm] = useState(emptyForm);
   const [entries, setEntries] = useState([]);
-  const [pdfModalOpen, setPdfModalOpen] = useState(false);
-  const [scholarModalOpen, setScholarModalOpen] = useState(false);
-  
+const [pdfModalOpen, setPdfModalOpen] = useState(false);
+const [scholarModalOpen, setScholarModalOpen] = useState(false);
+const [staffList, setStaffList] = useState([]);
+
   // สถานะผลการคำนวณจาก Backend
   const [previewData, setPreviewData] = useState(null);
 
@@ -140,62 +141,219 @@ function AcademicWorkloadMain() {
   const handleChangeAuthor = (index, field, value) => {
     setForm(prev => {
       const newList = [...(prev.authorList || [])];
-      newList[index] = { ...newList[index], [field]: value };
+      
+      if (field === 'proportion') {
+        if (value === "") {
+          newList[index].proportion = ""; // Allow empty state during typing
+        } else {
+          let num = Number(value);
+          if (isNaN(num)) num = 0;
+          if (num < 0) num = 0;
+          if (num > 100) num = 100;
+
+          newList[index].proportion = num;
+        }
+      } else {
+        newList[index][field] = value;
+      }
+
       return { ...prev, authorList: newList };
     });
   };
 
-  // Handler for importing paper data from Scholar Dashboard / Modal to Form
-  const handleImportFromScholar = (paperData, userObj) => {
-    const authorDisplayName = userObj?.name_th || userObj?.name_en || userObj?.full_name || user?.full_name || '';
+  // 2. ⚡ Preset: หารเท่ากันทุกคน (Equal Split) -> 100% / N
+  const handleEqualSplit = () => {
+    const count = form.authorList?.length || 0;
+    if (count === 0) return;
+
+    const share = Number((100 / count).toFixed(1));
     
-    // Auto-detect author role if available
-    let detectedAuthorRole = AUTHOR_OPTIONS[0];
-    if (paperData.is_first_author) {
-      detectedAuthorRole = "First author";
-    } else if (paperData.is_corresponding) {
-      detectedAuthorRole = "Corresponding author";
-    } else if (paperData.is_co_first_author) {
-      detectedAuthorRole = "Co author";
-    }
-
-    const authorRaw = paperData.authors_raw || paperData.authors || [];
-
-    // ✅ รองรับทั้ง String (Google Scholar) และ Array (Scopus)
-    const authorList = Array.isArray(authorRaw)
-      ? authorRaw
-      : (typeof authorRaw === 'string' ? authorRaw.split(',') : []);
-
-    const authorNames = authorList.map(a => a.trim()).filter(Boolean);
-    const correspondingName = paperData.corresponding_author || paperData.correspondingAuthor || '';
-    const mappedAuthorList = authorNames.map((name, i) => ({
-      id: Date.now() + i,
-      role: i === 0 ? "First Author" : "Co-author",
-      name: name,
-      affiliation: "",
-      isCorresponding: name === correspondingName
+    setForm(prev => ({
+      ...prev,
+      authorList: (prev.authorList || []).map(author => ({
+        ...author,
+        proportion: share
+      }))
     }));
-    const mappedForm = {
-      ...form,
-      title: paperData.title || '',
-      authorList: mappedAuthorList,
-      journal: paperData.journal || '',
-      doi: paperData.doi || '',
-      publicationDate: paperData.publish_year ? `${paperData.publish_year}-01-01` : (paperData.publicationDate || ''),
-      volume: paperData.volume || '',
-      issue: paperData.issue || '',
-      abstract: paperData.abstract || '',
-      keywords: paperData.keywords || '',
-      authorName: authorDisplayName,
-      author: detectedAuthorRole,
-      correspondingAuthor: correspondingName,
-      proportion: paperData.contribution_percent || 100,
-    };
-    setForm(mappedForm);
-    setTab('form');
-    if (setToast) {
-      setToast(`นำเข้าผลงาน "${(paperData.title || '').slice(0, 35)}..." จาก Google Scholar เรียบร้อย`);
+  };
+
+  // 3. 👑 Preset: เน้นคนแรก (Smart Leader Heavy) -> Dynamic Leader share
+  const handleLeaderHeavy = () => {
+    const count = form.authorList?.length || 0;
+    if (count === 0) return;
+    
+    if (count === 1) {
+      setForm(prev => ({
+        ...prev,
+        authorList: (prev.authorList || []).map(a => ({ ...a, proportion: 100 }))
+      }));
+      return;
     }
+
+    // Dynamic Leader share allocation
+    let leaderShare = 50;
+    if (count === 2) leaderShare = 60;      // 60 / 40
+    else if (count === 3) leaderShare = 50; // 50 / 25 / 25
+    else if (count === 4) leaderShare = 40; // 40 / 20 / 20 / 20
+    else leaderShare = 50;                  // 5+ authors: 50 / remainder split
+
+    const remainingShare = Number(((100 - leaderShare) / (count - 1)).toFixed(1));
+
+    setForm(prev => ({
+      ...prev,
+      authorList: (prev.authorList || []).map((author, idx) => ({
+        ...author,
+        proportion: idx === 0 ? leaderShare : remainingShare
+      }))
+    }));
+  };
+
+  // 4. ฟังก์ชันตรวจสอบความถูกต้องของฟอร์มผู้แต่ง
+  const validateAuthorsForm = () => {
+    const authorList = form.authorList || [];
+
+    if (authorList.length === 0) {
+      alert("กรุณาเพิ่มผู้แต่งอย่างน้อย 1 คน");
+      return false;
+    }
+
+    // 1. Check for empty proportion values
+    const hasEmpty = authorList.some(
+      a => a.proportion === "" || a.proportion === undefined || a.proportion === null
+    );
+    if (hasEmpty) {
+      alert("กรุณากรอกสัดส่วนการมีส่วนร่วม (%) ให้ครบทุกคน");
+      return false;
+    }
+
+    // 2. Check total percentage sum
+    const totalSum = authorList.reduce((sum, a) => sum + Number(a.proportion || 0), 0);
+    if (Math.abs(totalSum - 100) > 0.1) {
+      alert(`ผลรวมสัดส่วนต้องเท่ากับ 100% พอดี (ปัจจุบันรวมได้ ${totalSum.toFixed(1)}%)`);
+      return false;
+    }
+
+    // 3. Verify P1 >= P2 >= P3 constraint
+    for (let i = 1; i < authorList.length; i++) {
+      if (Number(authorList[i].proportion) > Number(authorList[i - 1].proportion)) {
+        alert(`สัดส่วนของผู้แต่งคนที่ ${i + 1} ต้องไม่มากกว่าผู้แต่งคนที่ ${i}`);
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+// Handler for importing paper data from Scholar Dashboard / Modal to Form
+  const handleImportFromScholar = (paperData, userObj) => {
+    console.log("📥 ข้อมูลดิบที่รับมาจาก Modal:", paperData);
+
+    // 1. เช็กที่มาของข้อมูลให้ชัดเจนยิ่งขึ้น (ป้องกันค่า null / undefined / สตริงว่าง)
+    const isScopusImport = Boolean(
+      paperData.eid &&
+      paperData.eid !== 'null' &&
+      paperData.eid !== 'undefined' &&
+      paperData.eid.trim() !== ''
+    ) || paperData.source === 'scopus';
+
+    console.log("📋 isScopusImport:", isScopusImport, "eid:", paperData.eid);
+
+    // 2. ใช้ Parser หั่นชื่อและจัดฟอร์แมตผู้แต่ง (รับค่า isScopusImport ด้วย)
+    const mappedAuthorList = parseImportedAuthors(paperData.authors_raw || paperData.authors, isScopusImport, staffList);
+
+    // 🌟 NEW: Equal split on import
+    const numAuthors = mappedAuthorList.length;
+    const initialSplit = numAuthors > 0 ? Math.floor(100 / numAuthors) : 0;
+    const remainder = numAuthors > 0 ? 100 - (initialSplit * numAuthors) : 0;
+
+    const authorsWithInitialSplit = mappedAuthorList.map((author, index) => ({
+      ...author,
+      proportion: index === 0 ? initialSplit + remainder : initialSplit
+    }));
+
+    // 3. ดึงชื่อ Corresponding Author จากตัวที่ปักธง isCorresponding ในอาร์เรย์
+    const correspondingAuthorName = authorsWithInitialSplit.find(a => a.isCorresponding)?.name
+      || (authorsWithInitialSplit.length > 0 ? authorsWithInitialSplit[authorsWithInitialSplit.length - 1].name : '');
+
+    // 4. Map ข้อมูลลง State ของ Form ให้ครบทุกฟิลด์
+    setForm(prev => ({
+      ...prev,
+      // 🌟 Title - รองรับ key หลายรูปแบบจาก Google Scholar / Scopus
+      title: paperData.title || paperData.article_title || paperData.name || paperData.title_text || prev.title,
+      // 🌟 Journal - รองรับ key หลายรูปแบบ (publisher, venue, publication)
+      journal: paperData.journal || paperData.publisher || paperData.venue || paperData.publication || prev.journal,
+      // 🌟 DOI - รองรับ key หลายรูปแบบ
+      doi: paperData.doi || paperData.article_doi || prev.doi,
+      // จัดการ Volume / Issue
+      volume: paperData.volume || prev.volume,
+      issue: paperData.issue || prev.issue,
+      // จัดการปีพิมพ์ (ถ้ามี) - รองรับ key หลายรูปแบบ
+      publicationDate: paperData.date || paperData.publicationDate || paperData.publication_date || paperData.publishDate || paperData.year || paperData.pub_year || (paperData.publish_year ? `${paperData.publish_year}-01-01` : '') || prev.publicationDate,
+      // บทคัดย่อและคำสำคัญ
+      abstract: paperData.abstract || paperData.description || prev.abstract,
+      keywords: Array.isArray(paperData.keywords)
+        ? paperData.keywords.join(', ')
+        : (paperData.keywords || prev.keywords),
+      // โยนรายชื่อผู้แต่งที่ผ่านการหั่นแล้วลงตาราง (พร้อม role และ isCorresponding)
+      authorList: authorsWithInitialSplit,
+      // ตั้งค่า Corresponding Author จากตัวที่ปักธงไว้ในอาร์เรย์โดยตรง
+      correspondingAuthor: correspondingAuthorName
+    }));
+
+    // เลื่อนหน้าจากกลับขึ้นไปด้านบนเพื่อให้ผู้ใช้เห็นว่าข้อมูลเปลี่ยนแล้ว
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // 🌟 ฟังก์ชันแปลงรายชื่อผู้แต่งจาก Scopus/Scholar ให้เข้ากับโครงสร้าง authorList
+  const parseImportedAuthors = (rawAuthors, isScopusImport, staffList) => {
+    // 1. ถ้าไม่มีข้อมูลเลย ให้คืนค่าผู้แต่งว่างๆ 1 คน
+    if (!rawAuthors) {
+      return [{ id: Date.now(), name: "", proportion: "", affiliation: "", role: "First Author", isCorresponding: false }];
+    }
+
+    let namesArray = [];
+
+    // 2. เช็คว่าข้อมูลที่ได้มาเป็น Array หรือ String
+    if (Array.isArray(rawAuthors)) {
+      namesArray = rawAuthors;
+    } else if (typeof rawAuthors === 'string') {
+      // Scopus มักจะคั่นชื่อด้วยเครื่องหมาย ';' หรือ ','
+      const delimiter = rawAuthors.includes(';') ? ';' : ',';
+      namesArray = rawAuthors.split(delimiter);
+    }
+
+    // 3. ลบช่องว่างหน้าหลังและเอาชื่อที่ว่างออก
+    namesArray = namesArray.map(name => name.trim()).filter(name => name.length > 0);
+
+    // 4. ถ้าหั่นแล้วว่างเปล่า คืนค่า default
+    if (namesArray.length === 0) {
+      return [{ id: Date.now(), name: "", proportion: "", affiliation: "", role: "First Author", isCorresponding: false }];
+    }
+
+    // 5. 🌟 Normalize ชื่อจาก "Last, First" → "First Last" (เช่น "Riyana, S." → "S. Riyana")
+    const normalizeName = (name) => {
+      const parts = name.split(',').map(p => p.trim());
+      if (parts.length === 2) {
+        return `${parts[1]} ${parts[0]}`;
+      }
+      return name; // รูปแบบอื่นคืนค่าเดิม
+    };
+
+    // 6. ประกอบเป็น Array Object ตามโครงสร้าง authorList พร้อม role, isCorresponding, และ affiliation
+    return namesArray.map((name, index) => {
+      const isLastAuthor = index === namesArray.length - 1;
+      const isCorresponding = isScopusImport ? index === 0 : isLastAuthor;
+      const normalizedName = normalizeName(name);
+      const affiliation = enrichAuthorWithAffiliation(staffList, normalizedName);
+      return {
+        id: Date.now() + index,
+        name: normalizedName,
+        proportion: "", // 🌟 ปล่อยว่างไว้ให้ผู้ใช้กดปุ่ม Preset
+        affiliation: affiliation,
+        role: index === 0 ? 'First Author' : (isCorresponding ? 'Corresponding Author' : 'Co Author'),
+        isCorresponding: isCorresponding
+      };
+    });
   };
 
   // Handler for PDF extraction completion
@@ -224,11 +382,13 @@ function AcademicWorkloadMain() {
         } else if (isCorresponding) {
           role = 'Corresponding Author';
         }
+        // Enrich affiliation: use AI-provided first, then try staff matching
+        const affiliation = author.affiliation || enrichAuthorWithAffiliation(staffList, author.name);
         return {
           id: Date.now() + i,
           role: role,
           name: author.name || '',
-          affiliation: author.affiliation || '',
+          affiliation: affiliation,
           isCorresponding: isCorresponding,
           is_first_author: author.is_first_author || false,
           is_co_first_author: author.is_co_first_author || false,
@@ -367,7 +527,8 @@ function computeClientCalculation(formState) {
     uni: 40000
   };
 
-  const actualHours = Math.round(((Number(formState.proportion) || 0) * lookup.hours) / 100 * 100) / 100;
+  const userProportion = Number(formState.authorList?.[0]?.proportion || 0);
+  const actualHours = Math.round((userProportion * lookup.hours) / 100 * 100) / 100;
   const faculty = calculateFacultyFunding(formState.type, formState.author, lookup.faculty);
   const dateInfo = computeClientDateInfo(formState.publicationDate || formState.date);
 
@@ -416,8 +577,49 @@ function computeClientCalculation(formState) {
     }
   }, [user]);
 
+  // ดึงรายชื่ออาจารย์สำหรับ Auto-Mapping Affiliation (แค่ครั้งเดียว)
+  useEffect(() => {
+    fetch(`${API_URL}/users/staff`)
+      .then(res => res.json())
+      .then(data => setStaffList(data || []))
+      .catch(err => console.error("[Staff List Error]:", err));
+  }, []);
+
+  // 🔧 Utility: Normalize ชื่อสำหรับแมตช์ (lowercase, trim, strip punctuation)
+  const normalizeName = (name) => {
+    if (!name) return '';
+    return name.toLowerCase().trim().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+  };
+
+  // 🔧 Utility: แมตช์ชื่อผู้แต่งกับฐานข้อมูลอาจารย์ เพื่อเติม Affiliation อัตโนมัติ
+  const enrichAuthorWithAffiliation = (staffList, authorName) => {
+    if (!authorName || !staffList || staffList.length === 0) return '';
+    const cleanName = normalizeName(authorName);
+
+    const matchedStaff = staffList.find(staff => {
+      const nameEn = normalizeName(staff.name_en);
+      const nameTh = normalizeName(staff.name_th);
+      const fullName = normalizeName(staff.full_name);
+      return cleanName === nameEn || cleanName === nameTh || cleanName === fullName ||
+             nameEn.includes(cleanName) || nameTh.includes(cleanName) || fullName.includes(cleanName);
+    });
+
+    if (matchedStaff && matchedStaff.department) {
+      const emailDomain = matchedStaff.email?.split('@')[1] || '';
+      if (emailDomain && emailDomain !== 'up.ac.th') {
+        return `${matchedStaff.department}, ${emailDomain.split('.').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}`;
+      }
+      return `${matchedStaff.department}, University of Phayao`;
+    }
+
+    return '';
+  };
+
   // ฟังก์ชันบันทึกข้อมูลไปยัง Backend
   const handleSave = async () => {
+    // 🌟 Validate authors form before saving
+    if (!validateAuthorsForm()) return;
+
     const activePreview = previewData || computeClientCalculation(form);
     const entryId = form.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
@@ -844,93 +1046,166 @@ function computeClientCalculation(formState) {
                 />
               </div>
 
-{/* ผู้แต่ง และ สถาบัน (Authors & Affiliations) */}
+{/* Authors & Affiliations (ผู้แต่งและหน่วยงาน) */}
 <div className="form-group">
-  <label className="form-label">
-    Authors & Affiliations (ผู้แต่งและหน่วยงาน) <span style={{ color: "#ef4444" }}>*</span>
-  </label>
+  {/* Header Row with Title & Total Percentage Badge */}
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+    <label className="form-label" style={{ margin: 0 }}>
+      Authors & Affiliations (ผู้แต่งและหน่วยงาน) <span style={{ color: "#ef4444" }}>*</span>
+    </label>
 
-  {/* วนลูปแสดงรายการผู้แต่ง */}
-  {(form.authorList || []).map((author, index) => (
-    <div 
-      key={author.id} 
-      style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}
-    >
-      {/* บทบาท (Role) */}
-      <input
-        type="text"
-        className="form-control"
-        style={{
-          width: '150px',
-          backgroundColor: '#f3f4f6',
-          color: '#374151',
+    {/* Total Percentage Status Badge */}
+    {(() => {
+      const total = (form.authorList || []).reduce((sum, item) => sum + Number(item.proportion || 0), 0);
+      const isComplete = Math.abs(total - 100) < 0.1;
+      const hasEmpty = (form.authorList || []).some(a => a.proportion === "" || a.proportion === undefined);
+
+      return (
+        <span style={{
+          fontSize: '12px',
+          padding: '4px 10px',
+          borderRadius: '12px',
           fontWeight: '600',
-          cursor: 'not-allowed'
-        }}
-        value={index === 0 ? "First Author" : "Co-author"}
-        readOnly
-      />
+          backgroundColor: hasEmpty ? '#f3f4f6' : isComplete ? '#dcfce7' : '#fee2e2',
+          color: hasEmpty ? '#6b7280' : isComplete ? '#15803d' : '#b91c1c'
+        }}>
+          {hasEmpty ? "กรอก % ให้ครบทุกช่อง" : `รวมทั้งหมด: ${total.toFixed(1)}% ${isComplete ? "✓" : "(ต้องครบ 100%)"}`}
+        </span>
+      );
+    })()}
+  </div>
 
-      {/* ชื่อ-นามสกุล */}
-      <input
-        type="text"
-        className="form-control"
-        placeholder="ชื่อ-นามสกุล (เช่น Somchai J.)"
-        value={author.name}
-        onChange={(e) => handleChangeAuthor(index, 'name', e.target.value)}
-        required
-      />
+  {/* Author Entry List */}
+  {(form.authorList || []).map((author, index) => {
+    const maxAllowed = index === 0 
+      ? 100 
+      : Number(form.authorList[index - 1]?.proportion ?? 100);
 
-      {/* สถาบัน */}
-      <input
-        type="text"
-        className="form-control"
-        placeholder="สถาบัน (เช่น Mahidol University)"
-        value={author.affiliation}
-        onChange={(e) => handleChangeAuthor(index, 'affiliation', e.target.value)}
-        required
-      />
+    return (
+      <div 
+        key={author.id} 
+        style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', marginBottom: '12px' }}
+      >
+        {/* Role Badge Input */}
+        <input
+          type="text"
+          className="form-control"
+          style={{
+            width: '120px',
+            backgroundColor: '#e5e7eb',
+            color: '#374151',
+            fontWeight: '600',
+            textAlign: 'center',
+            cursor: 'not-allowed',
+            marginTop: '24px'
+          }}
+          value={index === 0 ? "First Author" : `Co Author ${index}`}
+          readOnly
+        />
 
-      {/* ปุ่มกากบาทลบ (แสดงเฉพาะคนที่ 2 เป็นต้นไป) */}
-      <div style={{ width: '30px', textAlign: 'center' }}>
-        {index > 0 && (
-          <button
-            type="button"
-            onClick={() => handleRemoveAuthor(index)}
-            style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold' }}
-            title="ลบผู้แต่ง"
-          >
-            ✕
-          </button>
-        )}
+        {/* Author Name Input */}
+        <div style={{ flex: 1 }}>
+          <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', color: '#6b7480' }}>ชื่อ-นามสกุล</label>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="ชื่อ-นามสกุล (เช่น Somchai J.)"
+            value={author.name || ''}
+            onChange={(e) => handleChangeAuthor(index, 'name', e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Author Proportion Input with Dynamic Max */}
+        <div style={{ width: '130px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+            <label className="form-label" style={{ margin: 0, fontSize: '12px', color: '#6b7480' }}>สัดส่วน (%)</label>
+            <span style={{ fontSize: '10px', color: '#9ca3af' }}>
+              (≤ {maxAllowed}%)
+            </span>
+          </div>
+          <input
+            type="number"
+            min="0"
+            max={maxAllowed}
+            className="form-control"
+            placeholder={`0 - ${maxAllowed}`}
+            value={author.proportion ?? ''}
+            onChange={e => handleChangeAuthor(index, 'proportion', e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Institution / Affiliation Input */}
+        <div style={{ flex: 1 }}>
+          <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px', color: '#6b7480' }}>สถาบัน</label>
+          <input
+            type="text"
+            className="form-control"
+            placeholder="สถาบัน (เช่น Mahidol University)"
+            value={author.affiliation || ''}
+            onChange={(e) => handleChangeAuthor(index, 'affiliation', e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Delete Row Button */}
+        <div style={{ width: '30px', textAlign: 'center', marginTop: '28px' }}>
+          {index > 0 && (
+            <button
+              type="button"
+              onClick={() => handleRemoveAuthor(index)}
+              style={{ border: 'none', background: 'none', color: '#111827', cursor: 'pointer', fontSize: '18px', fontWeight: 'bold' }}
+              title="ลบผู้แต่ง"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
-    </div>
-  ))}
+    );
+  })}
 
-  {/* ปุ่มเพิ่มผู้แต่ง */}
-  <button
-    type="button"
-    onClick={handleAddAuthor}
-    style={{ marginTop: '10px', padding: '8px 16px', borderRadius: '6px', border: '1px solid #d1d5db', background: '#f9fafb', cursor: 'pointer' }}
-  >
-    + Add Author
-  </button>
-</div>
-
-{/* แยกช่องกรอก Corresponding Author ออกมาด้านล่างต่างหาก */}
+  {/* ผู้แต่งที่ทำหน้าที่ติดต่อ / ผู้รับผิดชอบบทความ (Corresponding Author) */}
 <div className="form-group" style={{ marginTop: '20px' }}>
   <label className="form-label">
-    Corresponding Author <span style={{ color: "#ef4444" }}>*</span>
+    Corresponding Author (ผู้แต่งที่ทำหน้าที่ติดต่อ / ผู้รับผิดชอบบทความ) <span style={{ color: "#ef4444" }}>*</span>
   </label>
   <input
     type="text"
     className="form-control"
-    placeholder="ระบุชื่อ Corresponding Author"
+    placeholder="เช่น Somchai J. (somchai.j@ict.university.ac.th)"
     value={form.correspondingAuthor || ''}
     onChange={(e) => setForm({ ...form, correspondingAuthor: e.target.value })} 
     required
   />
 </div>
+
+  {/* Footer Action Bar: Add Author + Preset Controls */}
+  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', flexWrap: 'wrap' }}>
+    <button
+      type="button"
+      onClick={handleAddAuthor}
+      style={{
+        padding: '8px 16px',
+        borderRadius: '6px',
+        border: '1px solid #d1d5db',
+        background: '#f9fafb',
+        color: '#374151',
+        fontSize: '14px',
+        cursor: 'pointer',
+        fontWeight: '500'
+      }}
+    >
+      + Add Author
+    </button>
+
+    
+  </div>
+</div>
+
+
+
 
               {/* ชื่อวารสาร (Journal) */}
               <div className="form-group">
@@ -1065,48 +1340,7 @@ function computeClientCalculation(formState) {
                 </select>
               </div>
 
-              {/* สัดส่วน (0-100%) */}
-              <div className="form-group">
-                <div className="form-label-row">
-                  <label className="form-label" style={{ margin: 0 }}>สัดส่วนการมีส่วนร่วม (%)</label>
-                  <span className="badge-value">
-                    {form.proportion !== "" ? `${form.proportion}%` : "0%"}
-                  </span>
-                </div>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={form.proportion}
-                  onChange={e => {
-                    const val = e.target.value;
-                    if (val === "") {
-                      setForm({ ...form, proportion: "" });
-                    } else {
-                      const num = Number(val);
-                      if (num >= 0 && num <= 100) {
-                        setForm({ ...form, proportion: num });
-                      }
-                    }
-                  }}
-                  placeholder="กรอกตัวเลข 0 - 100"
-                  className="form-control"
-                />
-                {/* Fast Preset Buttons */}
-                <div className="preset-buttons">
-                  {[100, 50, 33.3, 25].map(pct => (
-                    <button
-                      key={pct}
-                      type="button"
-                      onClick={() => setForm({ ...form, proportion: pct })}
-                      className={`preset-btn ${form.proportion === pct ? "active" : ""}`}
-                    >
-                      {pct}%
-                    </button>
-                  ))}
-                </div>
               </div>
-            </div>
 
             {/* Right Column: Sticky Royal Purple Hero Calculation Card */}
             <div className="preview-card-purple">
@@ -1133,7 +1367,12 @@ function computeClientCalculation(formState) {
                       <span className="hero-stat-unit">ชม.</span>
                     </div>
                     <div className="hero-stat-formula">
-                      = {previewData.hours} ชม.ฐาน × {form.proportion || 0}% สัดส่วน
+                      {(() => {
+                        const userProportion = Number(form.authorList?.[0]?.proportion || 0);
+                        return (
+                          <> = {previewData.hours} ชม.ฐาน × {userProportion}% สัดส่วน </>
+                        );
+                      })()}
                     </div>
                   </div>
 

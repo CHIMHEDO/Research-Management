@@ -10,16 +10,43 @@ const getPaperDetailsByEid = async (eid) => {
       }
     });
     const data = response.data['abstracts-retrieval-response'];
+    const coredata = data.coredata || {};
+    
+    // 🌟 Fix 1: Authors - try full authors list first, fallback to dc:creator (first author only)
+    let authorData = data.authors?.author || coredata['dc:creator']?.author;
+    
+    // Handle case where Scopus returns single object instead of array
+    if (authorData && !Array.isArray(authorData)) {
+      authorData = [authorData];
+    }
+    
+    const authors = authorData?.map(a => {
+      const firstName = a['ce:given-name'] || '';
+      const lastName = a['ce:surname'] || '';
+      return `${firstName} ${lastName}`.trim();
+    }).filter(name => name.length > 0) || [];
+    
+    // 🌟 Fix 2: Abstract - try multiple fallback fields with graceful fallback
+    const abstract = coredata['dc:description'] 
+      || coredata['prism:description'] 
+      || coredata['description'] 
+      || '';
+    
+    // 🌟 Fix 3: Keywords - check multiple possible locations with graceful fallback
+    const keywords = data.authkeywords?.['author-keyword']?.map(k => k.$) 
+      || coredata['subject-area']?.map(sa => sa['$']) 
+      || [];
+    
     const paperInfo = {
-      title: data.coredata['dc:title'],
-      doi: data.coredata['prism:doi'] || '',
-      journal: data.coredata['prism:publicationName'] || '',
-      publishDate: data.coredata['prism:coverDate'] || '',
-      volume: data.coredata['prism:volume'] || '',
-      issue: data.coredata['prism:issueIdentifier'] || '',
-      abstract: data.coredata['dc:description'] || '',
-      authors: data.authors?.author?.map(a => `${a['ce:given-name']} ${a['ce:surname']}`) || [],
-      keywords: data.authkeywords?.['author-keyword']?.map(k => k.$) || []
+      title: coredata['dc:title'],
+      doi: coredata['prism:doi'] || '',
+      journal: coredata['prism:publicationName'] || '',
+      publishDate: coredata['prism:coverDate'] || '',
+      volume: coredata['prism:volume'] || '',
+      issue: coredata['prism:issueIdentifier'] || '',
+      abstract: abstract || '',
+      authors: authors,
+      keywords: keywords
     };
     return paperInfo;
   } catch (error) {
