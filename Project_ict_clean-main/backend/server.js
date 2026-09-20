@@ -316,8 +316,8 @@ app.get("/api/users/staff", async (req, res) => {
   try {
     const { data: rows, error } = await supabase
       .from("users")
-      .select("name_en, name_th, full_name, email, department")
-      .order("name_en", { ascending: true });
+.select("id, name_en, name_th, full_name, email, department, position, scholar_id, scopus_id")
+       .order("name_en", { ascending: true });
     if (error) throw error;
     res.json(rows || []);
   } catch (error) {

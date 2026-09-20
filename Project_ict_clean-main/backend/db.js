@@ -1665,6 +1665,7 @@ async function initDatabase() {
                     department: f.department,
                     position: f.position,
                     scholar_id: f.scholar_id,
+                    scopus_id: f.scopus_id,
                     role: 'user'
                 });
             } else {
@@ -1673,7 +1674,8 @@ async function initDatabase() {
                     name_th: f.name_th,
                     department: f.department,
                     position: f.position,
-                    scholar_id: f.scholar_id
+                    scholar_id: f.scholar_id,
+                    scopus_id: f.scopus_id
                 }).eq('email', f.email);
             }
         }

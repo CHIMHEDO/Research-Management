@@ -15,8 +15,6 @@ import {
   UserCheck,
   GitBranch,
   Sparkles,
-  ArrowRight,
-  ArrowLeft,
   Loader2
 } from 'lucide-react';
 import api from '../api/client';
@@ -34,9 +32,9 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   const [feedback, setFeedback] = useState({ text: '', type: '' });
 
   // Scopus state
-  const [scopusTab, setScopusTab] = useState('scopus-search'); // 'google' | 'scopus-search' | 'scopus-papers'
-  const [scopusAuthorName, setScopusAuthorName] = useState('');
-  const [scopusAuthors, setScopusAuthors] = useState([]);
+  const [scopusTab, setScopusTab] = useState('google'); // 'google' | 'scopus'
+  const [authorsList, setAuthorsList] = useState([]);
+  const [selectedAuthorId, setSelectedAuthorId] = useState('');
   const [scopusPapers, setScopusPapers] = useState([]);
   const [scopusLoading, setScopusLoading] = useState(false);
   const [scopusFetchingDetail, setScopusFetchingDetail] = useState(false);
@@ -48,6 +46,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
     api.get('/users')
       .then(res => {
         setUsers(res.data);
+        setAuthorsList(res.data);
         // Default เลือกอาจารย์ที่ล็อกอินอยู่ หรือคนแรก
         if (user && user.id) {
           const matched = res.data.find(u => u.id === user.id || u.email === user.email);
@@ -155,41 +154,6 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
     onClose();
   };
 
-  // === SCOPUS LOGIC ===
-  const handleSearchAuthor = async (e) => {
-    if (e) e.preventDefault();
-    if (!scopusAuthorName.trim()) return;
-    setScopusLoading(true);
-    setScopusTab('scopus-search');
-    try {
-      const res = await api.get(`/scopus/authors/${encodeURIComponent(scopusAuthorName.trim())}`);
-      setScopusAuthors(res.data);
-      setScopusPapers([]);
-      setSelectedScopusPaper(null);
-      setScopusTab(res.data.length > 0 ? 'scopus-papers' : 'scopus-search');
-    } catch (err) {
-      console.error('Search author error:', err);
-      setFeedback({ text: 'ค้นหาอาจารย์ไม่สำเร็จ', type: 'error' });
-    } finally {
-      setScopusLoading(false);
-    }
-  };
-
-  const handleSelectAuthor = async (authorId) => {
-    setScopusLoading(true);
-    try {
-      const res = await api.get(`/scopus/author-papers/${authorId}`);
-      setScopusPapers(res.data);
-      setScopusTab('scopus-papers');
-      setSelectedScopusPaper(null);
-    } catch (err) {
-      console.error('Fetch author papers error:', err);
-      setFeedback({ text: 'ไม่สามารถดึงรายการเปเปอร์ได้', type: 'error' });
-    } finally {
-      setScopusLoading(false);
-    }
-  };
-
   const handleSelectScopusPaper = async (paper) => {
     setScopusFetchingDetail(true);
     setSelectedScopusPaper(paper);
@@ -217,6 +181,82 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
       setScopusFetchingDetail(false);
     }
   };
+
+  // ฟังก์ชันช่วยจัดกลุ่มและเรนเดอร์ Dropdown (รองรับทั้ง Scholar และ Scopus)
+  const renderGroupedSelect = (list, selectedId, onChange, isNumericId = false, isScopus = false) => {
+    const grouped = (list || []).reduce((acc, item) => {
+      const groupKey = isScopus
+        ? (item.affiliation || 'อื่นๆ / ไม่ระบุสังกัด')
+        : (item.department || item.branch || item.major || 'อื่นๆ / ไม่ระบุสาขา');
+
+      if (!acc[groupKey]) acc[groupKey] = [];
+      acc[groupKey].push(item);
+      return acc;
+    }, {});
+
+    return (
+      <select
+        value={selectedId || ''}
+        onChange={(e) => onChange(isNumericId ? Number(e.target.value) : e.target.value)}
+        style={{
+          width: '100%',
+          padding: '10px 12px',
+          border: '1px solid #d1d5db',
+          borderRadius: '8px',
+          outline: 'none',
+          fontSize: '14px',
+          backgroundColor: '#fff'
+        }}
+      >
+        <option value="">{isScopus ? '-- เลือกอาจารย์จาก Scopus --' : '-- เลือกอาจารย์ / บุคลากร --'}</option>
+        {Object.entries(grouped).map(([groupName, items]) => (
+          <optgroup key={groupName} label={`📂 ${groupName}`}>
+            {items.map((item) => {
+              const itemId = isScopus ? item.authorId : item.id;
+              const itemName = isScopus ? item.name : (item.name_th || item.name_en || item.full_name);
+
+              return (
+                <option key={itemId} value={itemId}>
+                  {'  '}{itemName}
+                </option>
+              );
+            })}
+          </optgroup>
+        ))}
+      </select>
+    );
+  };
+
+  // ฟังก์ชันดึงข้อมูล Scopus papers โดยใช้ scopus_id ของอาจารย์ที่เลือก
+  const fetchScopusPapers = useCallback(async () => {
+    if (!selectedAuthorId) return;
+    const author = authorsList.find(a => a.id.toString() === selectedAuthorId.toString());
+    if (!author?.scopus_id) return;
+    setScopusLoading(true);
+    try {
+      const res = await api.get(`/scopus/author-papers/${author.scopus_id}`);
+      setScopusPapers(res.data.papers || res.data);
+    } catch (err) {
+      console.error('Scopus fetch error:', err);
+      setScopusPapers([]);
+    } finally {
+      setScopusLoading(false);
+    }
+  }, [selectedAuthorId, authorsList]);
+
+  // Auto-fetch Scopus papers เมื่อเลือกอาจารย์
+  useEffect(() => {
+    if (!selectedAuthorId) {
+      setScopusPapers([]);
+      return;
+    }
+    const author = authorsList.find(a => a.id.toString() === selectedAuthorId.toString());
+    if (!author?.scopus_id) {
+      setScopusPapers([]);
+      return;
+    }
+    fetchScopusPapers();
+  }, [selectedAuthorId, authorsList, fetchScopusPapers]);
 
   if (!isOpen) return null;
 
@@ -266,7 +306,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
             </button>
             <button
               type="button"
-              onClick={() => { setScopusTab('scopus-search'); setFeedback({ text: '', type: '' }); }}
+              onClick={() => { setScopusTab('scopus'); setFeedback({ text: '', type: '' }); }}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: '6px',
                 padding: '8px 16px', borderRadius: '8px', border: 'none',
@@ -280,144 +320,165 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
             </button>
           </div>
 
-          {/* ═══ SCOPUS TAB ═══ */}
-          {scopusTab !== 'google' && (
-            <div>
-              {/* Author Search */}
-              <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                <input
-                  type="text"
-                  value={scopusAuthorName}
-                  onChange={(e) => setScopusAuthorName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSearchAuthor(e)}
-                  placeholder="พิมพ์ชื่ออาจารย์ (เช่น John Smith)..."
-                  style={{
-                    flex: 1, padding: '8px 12px', borderRadius: '8px',
-                    border: '1px solid #cbd5e1', fontSize: '13px', outline: 'none'
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={handleSearchAuthor}
-                  disabled={scopusLoading || !scopusAuthorName.trim()}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '6px',
-                    background: '#7c3aed', color: 'white', border: 'none',
-                    padding: '8px 14px', borderRadius: '8px', fontSize: '13px',
-                    fontWeight: '600', cursor: scopusLoading ? 'not-allowed' : 'pointer',
-                    opacity: scopusLoading ? 0.7 : 1, whiteSpace: 'nowrap'
-                  }}
-                >
-                  {scopusLoading ? <Loader2 size={14} className="spin" /> : <Search size={14} />}
-                  ค้นหา
-                </button>
-              </div>
-
-              {/* Author List */}
-              {scopusAuthors.length > 0 && scopusTab === 'scopus-search' && (
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '600', marginBottom: '6px' }}>
-                    พบอาจารย์ {scopusAuthors.length} ท่าน:
-                  </div>
-                  {scopusAuthors.map((a, i) => (
-                    <button
-                      type="button"
-                      key={i}
-                      onClick={() => handleSelectAuthor(a.authorId)}
-                      style={{
-                        background: 'none', border: 'none', padding: '10px 14px',
-                        width: '100%', textAlign: 'left', cursor: 'pointer',
-                        borderRadius: '8px', marginBottom: '6px',
-                        background: 'white', border: '1px solid #e2e8f0',
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        fontFamily: 'inherit'
-                      }}
-                      onMouseOver={(e) => { e.currentTarget.style.borderColor = '#c084fc'; }}
-                      onMouseOut={(e) => { e.currentTarget.style.borderColor = '#e2e8f0'; }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: '600', fontSize: '14px' }}>{a.name}</div>
-                        <div style={{ fontSize: '12px', color: '#64748b' }}>{a.affiliation}</div>
+{/* ═══ SCOPUS TAB ═══ */}
+            {scopusTab === 'scopus' && (
+              <div style={{ marginTop: '16px' }}>
+                
+                {/* โซนค้นหาและปุ่ม Refresh */}
+                <div style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  gap: '12px', 
+                  background: '#f9fafb', 
+                  padding: '16px', 
+                  borderRadius: '12px', 
+                  border: '1px solid #e5e7eb', 
+                  marginBottom: '16px' 
+                }}>
+                  <div style={{ width: '100%' }}>
+                    <label style={{ display: 'block', fontSize: '12px', fontWeight: '500', color: '#6b7280', marginBottom: '6px' }}>
+                      อาจารย์ผู้จัดทำ (Scopus)
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: '200px' }}>
+                        {renderGroupedSelect(authorsList, selectedAuthorId, setSelectedAuthorId, true, false)}
                       </div>
-                      <ArrowRight size={16} color="#7c3aed" />
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* Paper List */}
-              {scopusPapers.length > 0 && scopusTab === 'scopus-papers' && (
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '600' }}>
-                      รายการเปเปอร์ของอาจารย์ (คลิกเลือกเพื่อดูรายละเอียด):
+                      
+                      <button 
+                        type="button"
+                        onClick={fetchScopusPapers}
+                        disabled={scopusLoading || !selectedAuthorId}
+                        style={{ 
+                          padding: '10px', 
+                          backgroundColor: scopusLoading || !selectedAuthorId ? '#f3f4f6' : '#f5f3ff', 
+                          color: scopusLoading || !selectedAuthorId ? '#9ca3af' : '#7c3aed', 
+                          borderRadius: '8px', 
+                          border: scopusLoading || !selectedAuthorId ? '1px solid #e5e7eb' : '1px solid #ddd6fe', 
+                          fontWeight: '600', 
+                          fontSize: '14px',
+                          cursor: scopusLoading || !selectedAuthorId ? 'not-allowed' : 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          minWidth: '44px',
+                          boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                          opacity: scopusLoading || !selectedAuthorId ? 0.7 : 1,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <RefreshCw size={18} className={scopusLoading ? 'spin' : ''} />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setScopusTab('scopus-search')}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '4px',
-                        background: 'none', border: '1px solid #cbd5e1', color: '#475569',
-                        padding: '4px 10px', borderRadius: '6px', fontSize: '12px',
-                        fontWeight: '500', cursor: 'pointer', transition: 'all 0.15s ease'
-                      }}
-                      onMouseOver={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
-                      onMouseOut={(e) => { e.currentTarget.style.background = 'none'; }}
-                    >
-                      <ArrowLeft size={12} /> กลับไปค้นหา
-                    </button>
                   </div>
-                  {scopusPapers.map((paper, i) => (
-                    <button
-                      type="button"
-                      key={i}
-                      onClick={() => handleSelectScopusPaper(paper)}
-                      style={{
-                        background: 'none', border: 'none', padding: '10px 14px',
-                        width: '100%', textAlign: 'left', cursor: 'pointer',
-                        borderRadius: '8px', marginBottom: '6px', transition: 'all 0.15s ease',
-                        background: selectedScopusPaper?.eid === paper.eid ? '#f5f3ff' : 'white',
-                        border: `1px solid ${selectedScopusPaper?.eid === paper.eid ? '#c084fc' : '#e2e8f0'}`,
-                        fontFamily: 'inherit'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: '600', fontSize: '13px', lineHeight: '1.4' }}>{paper.title}</div>
-                          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '2px' }}>
-                            {paper.year} • {paper.journal} • {paper.citedBy > 0 ? `${paper.citedBy} citations` : ''}
+                </div>
+
+                {/* ข้อความสรุปจำนวน */}
+                {scopusPapers && scopusPapers.length > 0 && (
+                  <p style={{ fontSize: '14px', color: '#4b5563', fontWeight: '500', marginBottom: '12px' }}>
+                    พบทั้งหมด <span style={{ color: '#7c3aed', fontWeight: 'bold' }}>{scopusPapers.length}</span> รายการ 
+                    <span style={{ color: '#9ca3af', fontWeight: 'normal', fontSize: '12px', marginLeft: '6px' }}>(คลิก "นำไปคำนวณ" เพื่อกรอกข้อมูลลงฟอร์ม)</span>
+                  </p>
+                )}
+
+                {/* ลิสต์รายการผลงานแบบ Card */}
+                <div style={{ maxHeight: '50vh', overflowY: 'auto', paddingRight: '4px' }}>
+                  {scopusPapers && scopusPapers.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {scopusPapers.map((paper, index) => (
+                        <div 
+                          key={index} 
+                          style={{ 
+                            padding: '16px', 
+                            backgroundColor: '#ffffff', 
+                            border: '1px solid #e5e7eb', 
+                            borderRadius: '12px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '12px',
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.02)'
+                          }}
+                        >
+                          <div>
+                            <h4 style={{ fontSize: '15px', fontWeight: '600', color: '#1f2937', lineHeight: '1.4', margin: '0 0 8px 0' }}>
+                              {paper.title}
+                            </h4>
+                            
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', fontSize: '12px', color: '#6b7280', alignItems: 'center' }}>
+                              <span style={{ backgroundColor: '#f3f4f6', padding: '3px 8px', borderRadius: '6px', fontWeight: '500', color: '#374151' }}>
+                                🗓️ {paper.publish_year || paper.year || 'N/A'}
+                              </span>
+                              <span style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                📖 {paper.journal || paper.source || 'ไม่มีข้อมูลวารสาร'}
+                              </span>
+                              {paper.citedBy > 0 && (
+                                <span style={{ color: '#7c3aed', fontWeight: '500' }}>
+                                  🔗 {paper.citedBy} citations
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                            <button 
+                              type="button"
+                              onClick={() => handleSelectScopusPaper(paper)}
+                              style={{ 
+                                padding: '8px 16px', 
+                                backgroundColor: '#f5f3ff', 
+                                color: '#6d28d9', 
+                                borderRadius: '8px', 
+                                border: '1px solid #ddd6fe', 
+                                fontSize: '13px', 
+                                fontWeight: '600', 
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px'
+                              }}
+                            >
+                              + นำไปคำนวณ
+                            </button>
                           </div>
                         </div>
-                        {scopusFetchingDetail && selectedScopusPaper?.eid === paper.eid && (
-                          <Loader2 size={16} className="spin" color="#7c3aed" />
-                        )}
-                        {!scopusFetchingDetail && <Plus size={16} color="#7c3aed" />}
-                      </div>
-                    </button>
-                  ))}
+                      ))}
+                    </div>
+                  ) : (
+                    /* กรณีซิงก์แล้วแต่ไม่พบข้อมูล หรือยังไม่ได้ซิงก์ */
+                    <div style={{ 
+                      textAlign: 'center', 
+                      padding: '40px 20px', 
+                      border: '2px dashed #e5e7eb', 
+                      borderRadius: '12px', 
+                      backgroundColor: '#f9fafb',
+                      marginTop: '10px'
+                    }}>
+                      {selectedAuthorId ? (
+                        <p style={{ color: '#6b7280', fontWeight: '500', margin: '0 0 4px 0' }}>ไม่พบผลงาน Scopus สำหรับอาจารย์ท่านนี้</p>
+                      ) : (
+                        <p style={{ color: '#6b7280', fontWeight: '500', margin: '0 0 4px 0' }}>ยังไม่มีข้อมูลผลงาน Scopus</p>
+                      )}
+                      <p style={{ color: '#9ca3af', fontSize: '12px', margin: '0' }}>
+                        {selectedAuthorId 
+                          ? 'ลองกดปุ่ม Refresh หรือเลือกอาจารย์ท่านอื่น'
+                          : 'กรุณาเลือกอาจารย์และกดปุ่ม Refresh ด้านบน'}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
-
-              {/* Loading */}
-              {scopusLoading && (
-                <div style={{ textAlign: 'center', padding: '20px' }}>
-                  <Loader2 size={24} className="spin" color="#7c3aed" />
-                  <p style={{ fontSize: '13px', color: '#64748b', marginTop: '8px' }}>กำลังดึงข้อมูล...</p>
-                </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
           {/* ═══ GOOGLE SCHOLAR TAB ═══ */}
           {scopusTab === 'google' ? <div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
               <span style={{ fontSize: '13px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>
                 อาจารย์ผู้จัดทำ:
               </span>
               <select
                 className="form-control"
-                style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1' }}
+                style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', width: '100%' }}
                 value={selectedUserId || ''}
                 onChange={(e) => setSelectedUserId(Number(e.target.value))}
               >
