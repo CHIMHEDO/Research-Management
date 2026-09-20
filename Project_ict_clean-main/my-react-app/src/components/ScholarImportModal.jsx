@@ -40,19 +40,21 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   const [scopusFetchingDetail, setScopusFetchingDetail] = useState(false);
   const [selectedScopusPaper, setSelectedScopusPaper] = useState(null);
 
-  // ดึงรายชื่ออาจารย์ทั้งหมด
+  // ดึงรายชื่ออาจารย์ทั้งหมดและล็อคให้เป็นผู้ใช้ที่ล็อกอินอยู่เท่านั้น
   useEffect(() => {
     if (!isOpen) return;
     api.get('/users')
       .then(res => {
         setUsers(res.data);
+<<<<<<< HEAD
         setAuthorsList(res.data);
         // Default เลือกอาจารย์ที่ล็อกอินอยู่ หรือคนแรก
         if (user && user.id) {
+=======
+        if (user) {
+>>>>>>> ff1f34cfbe583cee69c4b1515f985368d82d5fc5
           const matched = res.data.find(u => u.id === user.id || u.email === user.email);
-          setSelectedUserId(matched ? matched.id : res.data[0]?.id || null);
-        } else if (res.data.length > 0) {
-          setSelectedUserId(res.data[0].id);
+          setSelectedUserId(matched ? matched.id : (user.id || res.data[0]?.id || null));
         }
       })
       .catch(err => console.error('Fetch users error:', err));
@@ -476,6 +478,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
               <span style={{ fontSize: '13px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>
                 อาจารย์ผู้จัดทำ:
               </span>
+<<<<<<< HEAD
               <select
                 className="form-control"
                 style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', width: '100%' }}
@@ -488,6 +491,26 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                   </option>
                 ))}
               </select>
+=======
+              <div style={{
+                padding: '6px 14px',
+                background: '#f8fafc',
+                border: '1px solid #cbd5e1',
+                borderRadius: '8px',
+                fontSize: '13px',
+                fontWeight: '600',
+                color: '#1e293b',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <UserCheck size={16} color="#7c3aed" />
+                <span>{currentUserObj?.name_th || currentUserObj?.name_en || currentUserObj?.full_name || user?.full_name || user?.name_th || user?.name_en || user?.email}</span>
+                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'normal', background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: '6px' }}>
+                  {currentUserObj?.department || user?.department || 'ICT'}
+                </span>
+              </div>
+>>>>>>> ff1f34cfbe583cee69c4b1515f985368d82d5fc5
             </div>
 
             <button

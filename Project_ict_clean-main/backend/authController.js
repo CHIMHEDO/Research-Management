@@ -1,15 +1,38 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const { supabase } = require('./db');
+const { supabase, UP_ICT_FACULTY } = require('./db');
 const { JWT_SECRET } = require('./authMiddleware');
 require('dotenv').config();
+
+// Helper to enrich user with database teacher name & department from users table and UP_ICT_FACULTY
+function enrichUserWithFaculty(user) {
+  if (!user) return null;
+  const emailLower = (user.email || '').toLowerCase().trim();
+  const matchedFaculty = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === emailLower);
+
+  const finalFullName = user.full_name || matchedFaculty?.name_en || matchedFaculty?.name_th || user.email;
+  const finalNameEn = user.name_en || user.full_name || matchedFaculty?.name_en || '';
+  const finalNameTh = user.name_th || matchedFaculty?.name_th || user.full_name || '';
+
+  return {
+    ...user,
+    full_name: finalFullName,
+    name_en: finalNameEn,
+    name_th: finalNameTh,
+    department: user.department || matchedFaculty?.department || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร',
+    position: user.position || matchedFaculty?.position || 'อาจารย์',
+    scholar_id: user.scholar_id || matchedFaculty?.scholar_id || null,
+    scopus_id: user.scopus_id || matchedFaculty?.scopus_id || null,
+  };
+}
 
 // Helper to flatten nested Supabase select results into the original shape
 function flattenUser(user) {
   if (!user) return null;
   const { programs, ...rest } = user;
-  return { ...rest, program_name: programs?.[0]?.name || null };
+  const flattened = { ...rest, program_name: programs?.[0]?.name || null };
+  return enrichUserWithFaculty(flattened);
 }
 
 function flattenUsers(users) {
@@ -206,17 +229,25 @@ exports.loginWithEmail = async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    const enriched = enrichUserWithFaculty({
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      name_en: user.name_en,
+      name_th: user.name_th,
+      department: user.department,
+      position: user.position,
+      scholar_id: user.scholar_id,
+      scopus_id: user.scopus_id,
+      role: user.role,
+      program_id: user.program_id,
+      program_name: user.programs?.[0]?.name || null,
+    });
+
     res.json({
       success: true,
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        full_name: user.full_name,
-        role: user.role,
-        program_id: user.program_id,
-        program_name: user.programs?.[0]?.name || null,
-      },
+      user: enriched,
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -256,5 +287,53 @@ exports.registerUser = async (req, res) => {
   } catch (error) {
     console.error('Register error:', error);
     res.status(500).json({ success: false, message: 'เกิดข้อผิดพลาดในระบบ' });
+  }
+};
+
+// 9. ค้นหาข้อมูลโปรไฟล์อาจารย์จากอีเมล (เช่น 67022546@up.ac.th -> KITTIPONG TRAKONSATHON)
+exports.lookupUserByEmail = async (req, res) => {
+  try {
+    const { email } = req.params;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'กรุณาระบุอีเมล' });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    // 1. หาใน Supabase users
+    const { data: users, error } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', cleanEmail)
+      .limit(1);
+
+    if (!error && users && users.length > 0) {
+      const user = users[0];
+      return res.json({ success: true, user: enrichUserWithFaculty(user) });
+    }
+
+    // 2. หาใน UP_ICT_FACULTY
+    const matched = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === cleanEmail);
+    if (matched) {
+      return res.json({
+        success: true,
+        user: {
+          id: null,
+          email: matched.email,
+          full_name: matched.name_en || matched.name_th,
+          name_en: matched.name_en,
+          name_th: matched.name_th,
+          department: matched.department || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร',
+          position: matched.position || 'อาจารย์',
+          scholar_id: matched.scholar_id,
+          scopus_id: matched.scopus_id,
+          role: 'user'
+        }
+      });
+    }
+
+    res.status(404).json({ success: false, message: 'ไม่พบข้อมูลอาจารย์จากอีเมลนี้ในระบบ' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

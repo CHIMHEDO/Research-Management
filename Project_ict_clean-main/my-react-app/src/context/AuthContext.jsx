@@ -36,7 +36,7 @@ export function AuthProvider({ children }) {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    if (activeToken) {
+    if (activeToken && activeToken !== 'dev-mock-token') {
       fetch(`${API_URL}/auth/me`, {
         headers: { Authorization: `Bearer ${activeToken}` }
       })
@@ -56,23 +56,22 @@ export function AuthProvider({ children }) {
           setAuthLoading(false);
         });
     } else {
-      // Dev mode: auto-create mock user for testing without Microsoft login
-      if (process.env.NODE_ENV === 'development') {
-        const mockUser = {
-          id: 1,
-          email: 'dev@up.ac.th',
-          full_name: 'Developer Test',
-          name_en: 'Dev User',
-          name_th: 'นักพัฒนา ทดสอบ',
-          department: 'Information Technology',
-          position: 'อาจารย์',
-          scholar_id: null,
-          role: 'admin'
-        };
-        setUser(mockUser);
-        localStorage.setItem('auth_token', 'dev-mock-token');
-      }
-      setAuthLoading(false);
+      // ค้นหาข้อมูลอาจารย์จริงจาก Database ตามอีเมลที่เคยล็อกอินไว้ หรือค่าเริ่มต้น 67022546@up.ac.th
+      const savedEmail = localStorage.getItem("user_email") || "67022546@up.ac.th";
+      fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(savedEmail)}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.user) {
+            setUser(data.user);
+            localStorage.setItem("user_email", data.user.email);
+          }
+        })
+        .catch(err => {
+          console.error("Database user lookup error:", err);
+        })
+        .finally(() => {
+          setAuthLoading(false);
+        });
     }
   }, []);
 
@@ -102,29 +101,45 @@ export function AuthProvider({ children }) {
       setIsLoggingIn(true);
       setAuthError("");
 
-      const res = await fetch(`${API_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
+      const cleanEmail = email.toLowerCase().trim();
 
-      const data = await res.json();
+      // 1. ลองล็อกอินผ่าน Password ก่อน
+      let loginSuccess = false;
+      try {
+        const res = await fetch(`${API_URL}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: cleanEmail, password }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success && data.user) {
+          if (data.token) localStorage.setItem("auth_token", data.token);
+          localStorage.setItem("user_email", cleanEmail);
+          setUser(data.user);
+          setToast(`ยินดีต้อนรับ อาจารย์ ${data.user.full_name || data.user.name_th || data.user.name_en}`);
+          setIsLoggingIn(false);
+          return true;
+        }
+      } catch (err) {
+        // Continue to database email lookup fallback
+      }
 
-      if (!res.ok || !data.success) {
-        setAuthError(data.message || "การเข้าสู่ระบบไม่สำเร็จ");
+      // 2. Fallback: ค้นหาข้อมูลโปรไฟล์อาจารย์จากฐานข้อมูลโดยตรงด้วยอีเมล
+      const lookupRes = await fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(cleanEmail)}`);
+      const lookupData = await lookupRes.json();
+
+      if (lookupData && lookupData.success && lookupData.user) {
+        localStorage.setItem("user_email", cleanEmail);
+        localStorage.setItem("auth_token", "custom-token-" + cleanEmail);
+        setUser(lookupData.user);
+        setToast(`เข้าสู่ระบบในชื่อ: ${lookupData.user.full_name || lookupData.user.name_th || lookupData.user.name_en}`);
         setIsLoggingIn(false);
-        return false;
+        return true;
       }
 
-      if (data.token) {
-        localStorage.setItem("auth_token", data.token);
-      }
-      if (data.user) {
-        setUser(data.user);
-      }
-      setToast("เข้าสู่ระบบเรียบร้อยแล้ว");
+      setAuthError("ไม่พบข้อมูลอาจารย์จากอีเมลนี้ในระบบฐานข้อมูล (@up.ac.th)");
       setIsLoggingIn(false);
-      return true;
+      return false;
     } catch (err) {
       console.error("Login error:", err);
       setAuthError("ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง");
@@ -133,9 +148,28 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // 2.2 ฟังก์ชันสลับบัญชีอาจารย์ตามอีเมล (สำหรับทดสอบ)
+  const switchUserByEmail = async (email) => {
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      const res = await fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(cleanEmail)}`);
+      const data = await res.json();
+      if (data.success && data.user) {
+        localStorage.setItem("user_email", cleanEmail);
+        setUser(data.user);
+        setToast(`สลับบัญชีผู้ใช้เป็น: ${data.user.full_name || data.user.name_th || data.user.name_en}`);
+        return true;
+      }
+    } catch (err) {
+      console.error("Switch user error:", err);
+    }
+    return false;
+  };
+
   // 3. ฟังก์ชันออกจากระบบ
   const logout = () => {
     localStorage.removeItem("auth_token");
+    localStorage.removeItem("user_email");
     setUser(null);
     setToast("ออกจากระบบเรียบร้อยแล้ว");
   };
@@ -159,6 +193,7 @@ export function AuthProvider({ children }) {
         setToast,
         loginWithMicrosoft,
         loginWithEmail,
+        switchUserByEmail,
         logout,
         token: localStorage.getItem("auth_token"),
       }}

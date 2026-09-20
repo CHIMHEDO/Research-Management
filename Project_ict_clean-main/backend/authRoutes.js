@@ -27,4 +27,7 @@ router.put('/users/:id/role', authenticateToken, authorizeRoles('admin'), authCo
 // 8. ดึงรายชื่อหลักสูตรทั้งหมด
 router.get('/programs', authController.getPrograms);
 
+// 9. ค้นหาข้อมูลโปรไฟล์อาจารย์จากอีเมล
+router.get('/lookup-email/:email', authController.lookupUserByEmail);
+
 module.exports = router;

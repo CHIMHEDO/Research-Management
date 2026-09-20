@@ -339,7 +339,7 @@ export default function ScholarDashboard({ onImportToForm }) {
 
   const handleConfirmPaper = async (paper, newContribution, isFirstAuthor, isCorresponding) => {
     try {
-      await api.put(`(papers/${paper.paper_id}/confirm`, {
+      await api.put(`/papers/${paper.paper_id}/confirm`, {
         userId: selectedProfId,
         contributionPercent: newContribution,
         isFirstAuthor,
