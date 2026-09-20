@@ -19,6 +19,7 @@ const {
   fetchPaperDetailFromUrl
 } = require("./scholarService");
 const { initScholarCron, getCronStatus } = require("./cronService");
+const { triggerCoAuthorNotificationWorkflow } = require("./emailService");
 require("dotenv").config();
 
 const app = express();
@@ -146,13 +147,18 @@ function formatEntry(row) {
     ========================================== */
 
 app.post("/api/calculate", (req, res) => {
-  const { author, type, db: selectedDb, proportion, date, publicationDate, authorList } = req.body;
+  const { author, authorName, type, db: selectedDb, proportion, date, publicationDate, authorList } = req.body;
   const lookup = LOOKUP_TABLE.find((r) => r.type === type && r.db === selectedDb);
   if (!lookup) return res.json({ success: false, message: "No match found" });
-  const userProportion = Number(authorList?.[0]?.proportion || 0);
+
+  const matchedAuthor = (Array.isArray(authorList) ? authorList : []).find(a => 
+    a.name && authorName && a.name.toLowerCase().trim() === authorName.toLowerCase().trim()
+  ) || authorList?.[0];
+
+  const userProportion = Number(matchedAuthor?.proportion ?? proportion ?? 0);
   const actualHours = Math.round((userProportion * lookup.hours) / 100 * 100) / 100;
   const dateInfo = computeDateInfo(publicationDate || date);
-  const faculty = calculateFacultyFunding(type, author, lookup.faculty);
+  const faculty = calculateFacultyFunding(type, matchedAuthor?.role || author, lookup.faculty);
   res.json({ success: true, data: { ...lookup, faculty, actualHours, dateInfo } });
 });
 
@@ -212,6 +218,36 @@ app.post("/api/entries", async (req, res) => {
     const { data: rows, error: fetchError } = await supabase
       .from("entries").select("*").order("created_at", { ascending: false });
     if (fetchError) throw fetchError;
+
+    // 📧 ส่งอีเมลแจ้งเตือนผู้แต่งทุกคนที่พบใน Database อัตโนมัติ (Async Background)
+    let processedAuthorList = req.body.authorList;
+    if (!Array.isArray(processedAuthorList) || processedAuthorList.length === 0) {
+      if (authors) {
+        const names = authors.split(/[,;]/).map(n => n.trim()).filter(Boolean);
+        processedAuthorList = names.map((name, idx) => ({
+          name,
+          role: idx === 0 ? "First author" : "Co author",
+          proportion: idx === 0 ? (proportion || 100) : 0
+        }));
+      } else if (authorName) {
+        processedAuthorList = [{ name: authorName, role: author || "First author", proportion: proportion || 100 }];
+      }
+    }
+
+    if (Array.isArray(processedAuthorList) && processedAuthorList.length > 0) {
+      console.log(`[Email Workflow] ตรวจพบผู้แต่ง ${processedAuthorList.length} คน สำหรับบทความ: "${title || 'ผลงานวิจัย'}" กำลังเริ่มค้นหาในฐานข้อมูลและส่งอีเมลแจ้งเตือนทันที...`);
+      triggerCoAuthorNotificationWorkflow({
+        paperId: id,
+        submitterUserId: req.body.userId || null,
+        submitterName: authorName || (processedAuthorList[0]?.name) || "ผู้บันทึกผลงาน",
+        submitterProportion: proportion || (processedAuthorList[0]?.proportion) || 100,
+        paperTitle: title || "ผลงานวิจัย",
+        authorList: processedAuthorList
+      }).then(res => {
+        console.log(`[Email Workflow] ส่งอีเมลแจ้งเตือนสำเร็จทั้งหมด ${res?.totalRecipients || 0} ท่าน (จากผู้แต่งที่พบใน Database)`);
+      }).catch(err => console.error("[Auto-Email Notification Error]:", err.message));
+    }
+
     res.json({ success: true, data: rows.map(formatEntry) });
   } catch (error) {
     console.error("Error saving entry:", error);
@@ -285,6 +321,24 @@ app.post("/api/save", async (req, res) => {
       participants: participants ? JSON.stringify(participants) : null
     }]);
     if (insertError) throw insertError;
+
+    // 📧 ส่งอีเมลแจ้งเตือนผู้แต่งทุกคนที่พบในฐานข้อมูลทันที (Async Background)
+    let saveAuthorList = [];
+    if (Array.isArray(authors)) {
+      saveAuthorList = authors.map((a, idx) => ({
+        name: typeof a === 'string' ? a : (a.name || a.full_name || ''),
+        role: typeof a === 'object' && a.role ? a.role : (idx === 0 ? 'First author' : 'Co author'),
+        proportion: typeof a === 'object' && a.proportion ? a.proportion : ''
+      }));
+    }
+    if (saveAuthorList.length > 0) {
+      triggerCoAuthorNotificationWorkflow({
+        submitterName: saveAuthorList[0]?.name || "ผู้บันทึกผลงาน",
+        paperTitle: article_title || "ผลงานวิจัย",
+        authorList: saveAuthorList
+      }).catch(err => console.error("[Save Paper Auto-Email Error]:", err.message));
+    }
+
     res.json({ message: "บันทึกข้อมูลสำเร็จ" });
   } catch (error) {
     console.error("[DB Save Error]:", error);
@@ -516,6 +570,26 @@ app.put("/api/papers/:paperId/confirm", async (req, res) => {
       newPaperStatus = "COMPLETED";
       await supabase.from("papers").update({ status: newPaperStatus, updated_at: new Date().toISOString() }).eq("id", paperId);
     }
+
+    // 📧 ส่งอีเมลแจ้งเตือนผู้แต่งร่วมที่ยังไม่ได้ยืนยัน (Async Background)
+    try {
+      const { data: paperRows } = await supabase.from("papers").select("title, authors_raw").eq("id", paperId).limit(1);
+      const { data: userRows } = await supabase.from("users").select("name_th, name_en, full_name").eq("id", userId).limit(1);
+      const submitterName = userRows?.[0]?.name_th || userRows?.[0]?.name_en || userRows?.[0]?.full_name || "ผู้แต่ง";
+      const paperTitle = paperRows?.[0]?.title || "ผลงานวิจัย";
+
+      triggerCoAuthorNotificationWorkflow({
+        paperId: parseInt(paperId, 10),
+        submitterUserId: parseInt(userId, 10),
+        submitterName,
+        submitterProportion: percent,
+        paperTitle,
+        authorsRaw: paperRows?.[0]?.authors_raw
+      }).catch(err => console.error("[Confirm Paper Auto-Email Error]:", err.message));
+    } catch (notifyErr) {
+      console.error("[Email Notification Prep Error]:", notifyErr.message);
+    }
+
     res.json({ message: "ยืนยันข้อมูลเรียบร้อยแล้ว", paperStatus: newPaperStatus || "PENDING_CO_AUTHOR", totalPercent: parseFloat(total_percent) });
   } catch (error) {
     console.error("[Confirm Paper Error]:", error);
