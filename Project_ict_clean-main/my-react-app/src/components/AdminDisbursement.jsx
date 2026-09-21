@@ -170,8 +170,8 @@ export default function AdminDisbursement({ entries = [], onUpdateEntry }) {
           {[
             { key: 'ALL', label: 'ทั้งหมด' },
             { key: 'PENDING', label: '⏳ รอตรวจสอบ' },
-            { key: 'APPROVED', label: '✅ อนุมัติแล้ว' },
-            { key: 'DISBURSED', label: '💵 จ่ายเงินแล้ว' }
+            { key: 'DISBURSED', label: '💵 จ่ายเงินแล้ว' },
+            { key: 'REJECTED', label: '❌ ปฏิเสธการเบิก' }
           ].map(f => (
             <button
               key={f.key}
@@ -213,7 +213,7 @@ export default function AdminDisbursement({ entries = [], onUpdateEntry }) {
             <tbody>
               {filteredEntries.map(entry => {
                 const isDisbursed = entry.currentStatus === 'DISBURSED';
-                const isApproved = entry.currentStatus === 'APPROVED';
+                const isRejected = entry.currentStatus === 'REJECTED';
 
                 return (
                   <tr key={entry.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -245,10 +245,10 @@ export default function AdminDisbursement({ entries = [], onUpdateEntry }) {
                         borderRadius: '20px',
                         fontSize: '12px',
                         fontWeight: '700',
-                        background: isDisbursed ? '#dcfce7' : isApproved ? '#e0e7ff' : '#fef3c7',
-                        color: isDisbursed ? '#15803d' : isApproved ? '#4338ca' : '#b45309'
+                        background: isDisbursed ? '#dcfce7' : (isRejected ? '#fee2e2' : '#fef3c7'),
+                        color: isDisbursed ? '#15803d' : (isRejected ? '#991b1b' : '#b45309')
                       }}>
-                        {isDisbursed ? '✓ จ่ายเงินแล้ว' : isApproved ? 'อนุมัติแล้ว' : '⏳ รอตรวจสอบ'}
+                        {isDisbursed ? '✓ จ่ายเงินแล้ว' : (isRejected ? '✕ ปฏิเสธ' : '⏳ รอตรวจสอบ')}
                       </span>
                     </td>
                     <td style={{ padding: '14px 18px', textAlign: 'center', fontSize: '13px', color: '#64748b' }}>
@@ -332,7 +332,6 @@ export default function AdminDisbursement({ entries = [], onUpdateEntry }) {
                     style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '14px', background: 'white' }}
                   >
                     <option value="PENDING">⏳ รอการตรวจสอบ (Pending)</option>
-                    <option value="APPROVED">✅ อนุมัติแล้ว (Approved)</option>
                     <option value="DISBURSED">💵 จ่ายเงินสำเร็จแล้ว (Disbursed)</option>
                     <option value="REJECTED">❌ ปฏิเสธการเบิก (Rejected)</option>
                   </select>

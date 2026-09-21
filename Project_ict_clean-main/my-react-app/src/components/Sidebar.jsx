@@ -95,18 +95,18 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
           <>
             <div className="sidebar-section-divider" style={{ margin: '14px 16px', borderTop: '1px solid rgba(255, 255, 255, 0.1)' }} />
             
-            <div className="sidebar-section-title" style={{ fontSize: '11px', fontWeight: '700', color: '#f59e0b', padding: '4px 16px 6px 16px', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <ShieldCheck size={14} color="#f59e0b" />
-              <span>ผู้ดูแลระบบ (Admin)</span>
+            <div className="sidebar-section-title" style={{ fontSize: '11px', fontWeight: '800', color: '#000000', padding: '4px 16px 6px 16px', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <ShieldCheck size={14} color="#000000" />
+              <span style={{ color: '#000000' }}>ผู้ดูแลระบบ (Admin)</span>
             </div>
 
             <button
               type="button"
               onClick={() => setTab('admin-faculty')}
               className={`sidebar-menu-btn ${tab === 'admin-faculty' ? 'active' : ''}`}
-              style={{ color: tab === 'admin-faculty' ? '#ffffff' : '#fde68a' }}
+              style={{ color: tab === 'admin-faculty' ? '#ffffff' : '#000000', fontWeight: '600' }}
             >
-              <Users size={18} />
+              <Users size={18} color={tab === 'admin-faculty' ? '#ffffff' : '#000000'} />
               <span>ภาพรวมอาจารย์ทั้งคณะ</span>
             </button>
 
@@ -114,9 +114,9 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
               type="button"
               onClick={() => setTab('admin-duplicates')}
               className={`sidebar-menu-btn ${tab === 'admin-duplicates' ? 'active' : ''}`}
-              style={{ color: tab === 'admin-duplicates' ? '#ffffff' : '#fca5a5' }}
+              style={{ color: tab === 'admin-duplicates' ? '#ffffff' : '#000000', fontWeight: '600' }}
             >
-              <Layers size={18} />
+              <Layers size={18} color={tab === 'admin-duplicates' ? '#ffffff' : '#000000'} />
               <span>ตรวจผลงานซ้ำ & ผู้ร่วม</span>
             </button>
 
@@ -124,9 +124,9 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
               type="button"
               onClick={() => setTab('admin-disbursements')}
               className={`sidebar-menu-btn ${tab === 'admin-disbursements' ? 'active' : ''}`}
-              style={{ color: tab === 'admin-disbursements' ? '#ffffff' : '#86efac' }}
+              style={{ color: tab === 'admin-disbursements' ? '#ffffff' : '#000000', fontWeight: '600' }}
             >
-              <Receipt size={18} />
+              <Receipt size={18} color={tab === 'admin-disbursements' ? '#ffffff' : '#000000'} />
               <span>บันทึกการเบิกเงินรางวัล</span>
             </button>
 
@@ -134,9 +134,9 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
               type="button"
               onClick={() => setTab('admin-audit')}
               className={`sidebar-menu-btn ${tab === 'admin-audit' ? 'active' : ''}`}
-              style={{ color: tab === 'admin-audit' ? '#ffffff' : '#cbd5e1' }}
+              style={{ color: tab === 'admin-audit' ? '#ffffff' : '#000000', fontWeight: '600' }}
             >
-              <History size={18} />
+              <History size={18} color={tab === 'admin-audit' ? '#ffffff' : '#000000'} />
               <span>ประวัติการแก้ไข (Logs)</span>
             </button>
           </>
