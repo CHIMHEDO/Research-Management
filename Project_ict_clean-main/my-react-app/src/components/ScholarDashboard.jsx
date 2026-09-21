@@ -51,7 +51,7 @@ function parsePosition(position) {
   return { specialRoles, academicRank };
 }
 
-function PaperCard({ paper, currentUser, onConfirm, onReject, onImport }) {
+function PaperCard({ paper, currentUser, onConfirm, onReject, onImport, activeTab = 'scholar' }) {
   const formatAuthors = (authorsRaw) => {
     if (!authorsRaw) return '';
     return authorsRaw.split(',').map(n => n.trim()).filter(Boolean).join(', ');
@@ -122,14 +122,24 @@ function PaperCard({ paper, currentUser, onConfirm, onReject, onImport }) {
             </div>
           )}
 
-          {paper.scholar_url && (
-            <a 
-              href={paper.scholar_url} 
-              target="_blank" 
-              rel="noopener noreferrer" 
+          {activeTab === 'scholar' && paper.scholar_url && (
+            <a
+              href={paper.scholar_url}
+              target="_blank"
+              rel="noopener noreferrer"
               style={{ fontSize: '13px', color: '#4A148C', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: '500' }}
             >
               <ExternalLink size={13} /> ดูที่ Google Scholar
+            </a>
+          )}
+          {activeTab === 'scopus' && paper.eid && (
+            <a
+              href={`https://www.scopus.com/abstract/uri/eid/${encodeURIComponent(paper.eid)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: '13px', color: '#4A148C', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: '500' }}
+            >
+              <ExternalLink size={13} /> ดูที่ Scopus
             </a>
           )}
         </div>
@@ -175,6 +185,7 @@ export default function ScholarDashboard({ onImportToForm }) {
   const [isLoadingPapers, setIsLoadingPapers] = useState(false);
   const [scholarIdInput, setScholarIdInput] = useState('');
   const [isSavingScholarId, setIsSavingScholarId] = useState(false);
+  const [isSavingScopusId, setIsSavingScopusId] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [scholarFeedback, setScholarFeedback] = useState('');
   const [scholarFeedbackType, setScholarFeedbackType] = useState('success');
@@ -182,6 +193,11 @@ export default function ScholarDashboard({ onImportToForm }) {
   const [filterStatus, setFilterStatus] = useState('ALL');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(true);
   const [isEditingScholarId, setIsEditingScholarId] = useState(false);
+  const [activeTab, setActiveTab] = useState('scholar');
+  const [scopusIdInput, setScopusIdInput] = useState('');
+  const [isEditingScopusId, setIsEditingScopusId] = useState(false);
+  const [scopusFeedback, setScopusFeedback] = useState('');
+  const [isScopusSyncing, setIsScopusSyncing] = useState(false);
 
   const departments = useMemo(() => {
     const existingDepts = [...new Set(users.map(u => u.department).filter(Boolean))];
@@ -205,26 +221,47 @@ export default function ScholarDashboard({ onImportToForm }) {
     return users.find(u => u.id === selectedProfId) || null;
   }, [users, selectedProfId]);
 
-  const pendingCount = useMemo(() => 
-    papers.filter(p => p.author_status === 'PENDING').length, [papers]);
-  const confirmedCount = useMemo(() => 
-    papers.filter(p => p.author_status === 'CONFIRMED').length, [papers]);
-  const totalCitations = useMemo(() => 
-    papers.reduce((sum, p) => sum + (Number(p.cited_by) || 0), 0), [papers]);
+const scopusPapers = useMemo(() =>
+    papers.filter(p => Boolean(p.eid)),
+  [papers]);
+  const scholarPapers = useMemo(() =>
+    papers.filter(p =>
+      Boolean(p.scholar_url) ||
+      Boolean(p.scholar_id) ||
+      p.source === 'scholar' ||
+      p.source === 'google_scholar'
+    ),
+  [papers]);
+  const displayPapers = useMemo(() =>
+    activeTab === 'scopus' ? scopusPapers : scholarPapers,
+  [activeTab, scopusPapers, scholarPapers]);
+
+  const totalCount = useMemo(() => displayPapers.length, [displayPapers]);
+  const pendingCount = useMemo(() =>
+    displayPapers.filter(p => p.author_status === 'PENDING').length, [displayPapers]);
+  const confirmedCount = useMemo(() =>
+    displayPapers.filter(p => p.author_status === 'CONFIRMED').length, [displayPapers]);
+  const totalCitations = useMemo(() =>
+    displayPapers.reduce((sum, p) => sum + (Number(p.cited_by) || 0), 0), [displayPapers]);
+  const scholarCount = scholarPapers.length;
+  const scopusCount = scopusPapers.length;
 
   const filteredPapers = useMemo(() => {
-    return papers.filter(paper => {
-      if (filterStatus !== 'ALL' && paper.author_status !== filterStatus) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
+    let base = displayPapers;
+    if (filterStatus !== 'ALL') {
+      base = base.filter(p => p.author_status === filterStatus);
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      base = base.filter(paper => {
         const titleMatch = (paper.title || '').toLowerCase().includes(q);
         const authorsMatch = (paper.authors_raw || '').toLowerCase().includes(q);
         const yearMatch = String(paper.publish_year || '').includes(q);
         return titleMatch || authorsMatch || yearMatch;
-      }
-      return true;
-    });
-  }, [papers, filterStatus, searchQuery]);
+      });
+    }
+    return base;
+  }, [displayPapers, filterStatus, searchQuery]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -253,19 +290,42 @@ export default function ScholarDashboard({ onImportToForm }) {
   const clearSelection = () => {
     setSelectedProfId(null);
     setScholarFeedback('');
+    setScopusFeedback('');
+    setActiveTab('scholar');
+  };
+
+  const saveScopusId = async () => {
+    if (!selectedProfId) return;
+    setIsSavingScopusId(true);
+    setScopusFeedback('');
+    try {
+      const res = await api.put(`/users/${selectedProfId}/scholar-id`, {
+        scopusId: scopusIdInput
+      });
+      if (currentUser) {
+        currentUser.scopus_id = res.data.user.scopus_id;
+      }
+      setScopusFeedback('✓ บันทึก Scopus ID สำเร็จ');
+      setTimeout(() => setScopusFeedback(''), 3000);
+    } catch (error) {
+      setScopusFeedback(error?.response?.data?.error || 'บันทึก Scopus ID ไม่สำเร็จ');
+    } finally {
+      setIsSavingScopusId(false);
+    }
   };
 
   const handleUserChange = (id) => {
     const user = users.find(u => u.id === id);
     if (user) {
       setScholarIdInput(user.scholar_id || '');
+      setScopusIdInput(user.scopus_id || '');
     }
     setScholarFeedback('');
+    setScopusFeedback('');
+    setActiveTab('scholar');
 
-    // 1. สั่งดึงข้อมูลเดิมจาก Database มาแสดงบนหน้าเว็บ "ทันที"
     fetchUserPapers(id);
 
-    // 2. ถ้ามี Scholar ID ให้สั่งบอทไปดึงผลงานใหม่แบบ "เบื้องหลัง" (ไม่บล็อกหน้าจอ)
     if (user && user.scholar_id) {
       triggerScholarSync(id);
     }
@@ -301,12 +361,13 @@ export default function ScholarDashboard({ onImportToForm }) {
     
     setIsSyncing(true);
     setScholarFeedback('🔄 กำลังดึงผลงานล่าสุดจาก Google Scholar แบบอัตโนมัติ...');
+    setScopusFeedback('');
     setScholarFeedbackType('success'); // ใช้สีเขียวเพื่อแสดงสถานะกำลังโหลด
     
     try {
       const res = await api.post(`/sync-scholar/${id}`);
       const data = res.data.data;
-      setScholarFeedback(`✓ ซิงก์อัตโนมัติสำเร็จ! (เพิ่มใหม่ ${data.created.length} รายการ, เชื่อมโยง Co-author ${data.linked.length} รายการ)`);
+      setScholarFeedback(`✓ ซิงก์อัตโนมัติสำเร็จ! (เพิ่มใหม่ ${data.created?.length ?? data.created ?? 0} รายการ, เชื่อมโยง Co-author ${data.linked?.length ?? data.linked ?? 0} รายการ)`);
       setScholarFeedbackType('success');
       await fetchUserPapers(id); // ดึงข้อมูลที่เพิ่งซิงก์เสร็จมาแสดง
     } catch (error) {
@@ -315,6 +376,30 @@ export default function ScholarDashboard({ onImportToForm }) {
       setScholarFeedbackType('error');
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const triggerScopusSync = async (targetId) => {
+    const id = (typeof targetId === 'number' || typeof targetId === 'string') ? targetId : selectedProfId;
+    if (!id) { 
+      console.error('❌ No valid user ID'); 
+      return; 
+    }
+    
+    setIsScopusSyncing(true);
+    setScopusFeedback('🔄 กำลังดึงผลงานล่าสุดจาก Scopus แบบอัตโนมัติ...');
+    setScholarFeedback('');
+    
+    try {
+      const res = await api.post(`/sync-scopus/${id}`);
+      const data = res.data.data;
+      setScopusFeedback(`✓ ซิงก์อัตโนมัติสำเร็จ! (เพิ่มใหม่ ${data.created?.length ?? data.created ?? 0} รายการ, อัปเดต ${data.updated?.length ?? data.updated ?? 0} รายการ)`);
+      await fetchUserPapers(id);
+    } catch (error) {
+      console.error(error);
+      setScopusFeedback('❌ ซิงก์อัตโนมัติไม่สำเร็จ โปรดลองกดปุ่มซิงก์ใหม่อีกครั้ง');
+    } finally {
+      setIsScopusSyncing(false);
     }
   };
 
@@ -460,7 +545,7 @@ export default function ScholarDashboard({ onImportToForm }) {
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
       
-      {/* 1. ส่วนหัว: ปุ่มย้อนกลับ, ชื่ออาจารย์ และ Scholar ID (Compact UI) */}
+      {/* 1. ส่วนหัว: ปุ่มย้อนกลับ, ชื่ออาจารย์, Tab Menu และ ID */}
       <div style={{ marginBottom: '32px' }}>
         <button 
           onClick={clearSelection} 
@@ -475,7 +560,45 @@ export default function ScholarDashboard({ onImportToForm }) {
             {currentUser?.name_th || currentUser?.name_en}
           </h2>
 
-          {/* Compact Google Scholar ID Box */}
+          {/* Tab Menu */}
+          <div style={{ display: 'flex', gap: '4px', background: '#e2e8f0', borderRadius: '10px', padding: '3px' }}>
+            <button
+              onClick={() => { setActiveTab('scholar'); setScopusFeedback(''); }}
+              style={{
+                padding: '6px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: activeTab === 'scholar' ? '#4A148C' : 'transparent',
+                color: activeTab === 'scholar' ? 'white' : '#64748b',
+                fontWeight: activeTab === 'scholar' ? 'bold' : 'normal',
+                fontSize: '13px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Google Scholar ({scholarCount})
+            </button>
+            <button
+              onClick={() => { setActiveTab('scopus'); setScholarFeedback(''); }}
+              style={{
+                padding: '6px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: activeTab === 'scopus' ? '#4A148C' : 'transparent',
+                color: activeTab === 'scopus' ? 'white' : '#64748b',
+                fontWeight: activeTab === 'scopus' ? 'bold' : 'normal',
+                fontSize: '13px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              Scopus ({scopusCount})
+            </button>
+          </div>
+        </div>
+
+        {/* ID Box: Scholar ID + Scopus ID */}
+        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginTop: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#FCFAEE', border: '1px solid #F0EAC5', padding: '6px 12px', borderRadius: '20px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
             <GraduationCap size={16} color="#4A148C" />
             <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#4A148C' }}>Scholar ID:</span>
@@ -491,10 +614,7 @@ export default function ScholarDashboard({ onImportToForm }) {
                   autoFocus
                 />
                 <button 
-                  onClick={async () => {
-                    await saveScholarId();
-                    setIsEditingScholarId(false);
-                  }}
+                  onClick={async () => { await saveScholarId(); setIsEditingScholarId(false); }}
                   disabled={isSavingScholarId}
                   style={{ background: '#10b981', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                   title="บันทึก"
@@ -502,10 +622,7 @@ export default function ScholarDashboard({ onImportToForm }) {
                   {isSavingScholarId ? <RefreshCw size={14} className="spin" /> : <Save size={14} />}
                 </button>
                 <button 
-                  onClick={() => {
-                    setIsEditingScholarId(false);
-                    setScholarIdInput(currentUser?.scholar_id || ''); // คืนค่าเดิมถ้ากดยกเลิก
-                  }}
+                  onClick={() => { setIsEditingScholarId(false); setScholarIdInput(currentUser?.scholar_id || ''); }}
                   style={{ background: '#ef4444', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
                   title="ยกเลิก"
                 >
@@ -524,7 +641,6 @@ export default function ScholarDashboard({ onImportToForm }) {
                 >
                   <Edit3 size={14} />
                 </button>
-                
                 {currentUser?.scholar_id && (
                   <button 
                     onClick={triggerScholarSync}
@@ -538,20 +654,82 @@ export default function ScholarDashboard({ onImportToForm }) {
               </div>
             )}
           </div>
+
+          {/* Scopus ID Box */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#f0fdf4', border: '1px solid #bbf7d0', padding: '6px 12px', borderRadius: '20px', boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+            <span style={{ fontSize: '16px' }}>✴️</span>
+            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#166534' }}>Scopus ID:</span>
+
+            {isEditingScopusId ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input 
+                  type="text" 
+                  value={scopusIdInput} 
+                  onChange={(e) => setScopusIdInput(e.target.value)}
+                  placeholder="เช่น 25960063900"
+                  style={{ padding: '2px 8px', fontSize: '13px', border: '1px solid #86efac', borderRadius: '4px', width: '160px', outline: 'none' }}
+                  autoFocus
+                />
+                <button 
+                  onClick={async () => { await saveScopusId(); setIsEditingScopusId(false); }}
+                  disabled={isSavingScopusId}
+                  style={{ background: '#10b981', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                  title="บันทึก"
+                >
+                  {isSavingScopusId ? <RefreshCw size={14} className="spin" /> : <Save size={14} />}
+                </button>
+                <button 
+                  onClick={() => { setIsEditingScopusId(false); setScopusIdInput(currentUser?.scopus_id || ''); }}
+                  style={{ background: '#ef4444', color: 'white', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                  title="ยกเลิก"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '13px', color: currentUser?.scopus_id ? '#64748b' : '#94a3b8' }}>
+                  {currentUser?.scopus_id || 'ยังไม่ระบุ'}
+                </span>
+                <button 
+                  onClick={() => setIsEditingScopusId(true)}
+                  style={{ background: 'transparent', border: 'none', color: '#16a34a', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
+                  title="แก้ไข ID"
+                >
+                  <Edit3 size={14} />
+                </button>
+                {currentUser?.scopus_id && (
+                  <button 
+                    onClick={() => triggerScopusSync(selectedProfId)}
+                    disabled={isScopusSyncing}
+                    style={{ background: '#16a34a', color: 'white', border: 'none', padding: '4px 10px', borderRadius: '12px', cursor: isScopusSyncing ? 'not-allowed' : 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '4px', opacity: isScopusSyncing ? 0.7 : 1 }}
+                  >
+                    <RefreshCw size={12} className={isScopusSyncing ? "spin" : ""} /> 
+                    {isScopusSyncing ? 'กำลังซิงก์...' : 'ซิงก์'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* ข้อความแจ้งเตือน (สำเร็จ/ผิดพลาด) */}
-        {scholarFeedback && (
+        {/* ข้อความแจ้งเตือน */}
+        {scholarFeedback && activeTab === 'scholar' && (
           <p style={{ margin: '12px 0 0 0', fontSize: '13px', color: scholarFeedbackType === 'error' ? '#ef4444' : '#166534', fontWeight: '500' }}>
             {scholarFeedback}
           </p>
         )}
+        {scopusFeedback && activeTab === 'scopus' && (
+          <p style={{ margin: '12px 0 0 0', fontSize: '13px', color: '#166534', fontWeight: '500' }}>
+            {scopusFeedback}
+          </p>
+        )}
       </div>
 
-      {/* 2. กล่องสถิติ (Stats Grid) */}
+      {/* 2. กล่องสถิติ (Stats Grid) - Derived State */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '32px' }}>
         {[
-          { label: 'ผลงานทั้งหมด', value: papers.length, icon: <BookOpen size={24} />, color: '#3b82f6', bg: '#eff6ff' },
+          { label: 'ผลงานทั้งหมด', value: totalCount, icon: <BookOpen size={24} />, color: '#3b82f6', bg: '#eff6ff' },
           { label: 'รอยืนยัน (% ภาระงาน)', value: pendingCount, icon: <Clock size={24} />, color: '#f59e0b', bg: '#fef3c7' },
           { label: 'ยืนยันเรียบร้อยแล้ว', value: confirmedCount, icon: <CheckCircle2 size={24} />, color: '#10b981', bg: '#dcfce7' },
           { label: 'ยอดการอ้างอิงรวม', value: totalCitations, icon: <Award size={24} />, color: '#8b5cf6', bg: '#f3e8ff' }
@@ -582,7 +760,7 @@ export default function ScholarDashboard({ onImportToForm }) {
         </div>
         <div style={{ display: 'flex', gap: '8px', overflowX: 'auto' }}>
           {[
-            { id: 'ALL', label: `ทั้งหมด (${papers.length})` },
+            { id: 'ALL', label: `ทั้งหมด (${totalCount})` },
             { id: 'PENDING', label: `รอยืนยัน (${pendingCount})` },
             { id: 'CONFIRMED', label: `ยืนยันแล้ว (${confirmedCount})` }
           ].map(tab => (
@@ -622,6 +800,7 @@ export default function ScholarDashboard({ onImportToForm }) {
               onConfirm={handleConfirmPaper}
               onReject={handlePaperRejected}
               onImport={handleImportToForm}
+              activeTab={activeTab}
             />
           ))}
         </div>
@@ -634,7 +813,11 @@ export default function ScholarDashboard({ onImportToForm }) {
           ) : filterStatus === 'PENDING' ? (
             <p style={{ color: '#64748b', margin: 0 }}>ยอดเยี่ยมมาก! ไม่มีผลงานค้างรอยืนยันในขณะนี้</p>
           ) : (
-            <p style={{ color: '#64748b', margin: 0 }}>ยังไม่มีข้อมูลผลงานวิชาการในระบบ สามารถกดแก้ไข ID ด้านบนเพื่อดึงข้อมูล</p>
+            <p style={{ color: '#64748b', margin: 0 }}>
+              {activeTab === 'scopus' 
+                ? 'ยังไม่มีข้อมูลผลงาน Scopus สามารถกดซิงก์ที่ป้าย Scopus ID ด้านบนเพื่อดึงข้อมูล'
+                : 'ยังไม่มีข้อมูลผลงานวิชาการในระบบ สามารถกดแก้ไข ID ด้านบนเพื่อดึงข้อมูล'}
+            </p>
           )}
         </div>
       )}

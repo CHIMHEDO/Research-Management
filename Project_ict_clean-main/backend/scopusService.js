@@ -1,4 +1,212 @@
 const axios = require('axios');
+const { supabase } = require('./db');
+require('dotenv').config();
+
+async function isPaperBlacklisted(userId, title) {
+    if (!title) return false;
+    const { data: blacklistRows } = await supabase
+        .from('paper_blacklists')
+        .select('id')
+        .eq('user_id', userId)
+        .ilike('scholar_title', title);
+    return blacklistRows && blacklistRows.length > 0;
+}
+
+function isAuthorInRawText(authorName, rawAuthors) {
+    if (!authorName || !rawAuthors) return false;
+    const cleanAuthor = authorName.trim().toLowerCase();
+    const cleanRaw = rawAuthors.toLowerCase();
+    if (cleanRaw.includes(cleanAuthor)) return true;
+    const parts = cleanAuthor.split(/\s+/);
+    if (parts.length > 1 && parts.every(p => cleanRaw.includes(p))) return true;
+    return false;
+}
+
+function cleanScopusPaper(paper) {
+    if (!paper) return null;
+    return {
+        eid: paper.eid ?? null,
+        title: paper.title?.trim() || 'Untitled',
+        publish_year: paper.publish_year ?? null,
+        authors_raw: paper.authors_raw ?? '',
+        cited_by: Number(paper.cited_by ?? 0),
+        journal: paper.journal ?? null,
+        doi: paper.doi ?? null,
+        source: 'scopus'
+    };
+}
+
+/**
+ * Sync ข้อมูล Scopus ของอาจารย์รายบุคคล
+ * บันทึกผลงานลง papers table พร้อม source: 'scopus'
+ */
+async function syncUserScopusData(userId) {
+    const { data: users } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId);
+    if (!users || users.length === 0) {
+        throw new Error(`ไม่พบผู้ใช้ ID: ${userId}`);
+    }
+    const user = users[0];
+    if (!user.scopus_id) {
+        throw new Error(`ผู้ใช้ยังไม่ได้ตั้งค่า Scopus ID`);
+    }
+
+    console.log(`[Scopus Sync] Fetching papers for authorId: ${user.scopus_id}`);
+    const rawPapers = await getAuthorPapers(user.scopus_id);
+    console.log(`[Scopus Sync] Before Supabase: ${rawPapers.length} papers, eids: ${rawPapers.map(p => p.eid).join(', ')}`);
+
+    const results = {
+        attempted: rawPapers.length,
+        created: 0,
+        updated: 0,
+        linked: 0,
+        alreadyLinked: 0,
+        conflicts: 0,
+        errors: 0,
+        invalid: 0,
+    };
+
+    for (const rawPaper of rawPapers) {
+        const paper = cleanScopusPaper(rawPaper);
+        if (!paper || !paper.eid || !paper.title) {
+            results.invalid++;
+            continue;
+        }
+
+        if (await isPaperBlacklisted(userId, paper.title)) {
+            continue;
+        }
+
+        // Step 1: Lookup by eid first
+        const { data: existingByEid, error: eidLookupError } = await supabase
+            .from('papers')
+            .select('id,eid,title,publish_year,source,status')
+            .eq('eid', paper.eid)
+            .maybeSingle();
+        if (eidLookupError) {
+            console.error('[Scopus EID Lookup Error]', { eid: paper.eid, error: eidLookupError.message });
+            results.errors++;
+            continue;
+        }
+
+        let existingPaper = existingByEid;
+
+        // Step 2: Fallback to title + publish_year
+        if (!existingPaper) {
+            const { data: existingByTitle, error: titleLookupError } = await supabase
+                .from('papers')
+                .select('id,eid,title,publish_year,source,status')
+                .eq('title', paper.title)
+                .eq('publish_year', paper.publish_year)
+                .maybeSingle();
+            if (titleLookupError) {
+                console.error('[Scopus Title Lookup Error]', { title: paper.title, error: titleLookupError.message });
+                results.errors++;
+                continue;
+            }
+            existingPaper = existingByTitle;
+
+            // Conflict check: if title+year matches but has different eid
+            if (existingPaper && existingPaper.eid && existingPaper.eid !== paper.eid) {
+                console.warn('[Scopus EID Conflict]', {
+                    paperId: existingPaper.id, title: paper.title,
+                    existingEid: existingPaper.eid, incomingEid: paper.eid
+                });
+                results.conflicts++;
+                continue;
+            }
+        }
+
+        let paperId = null;
+
+        // Step 3: Update existing paper or create new
+        if (existingPaper) {
+            paperId = existingPaper.id;
+            const { error: updError } = await supabase
+                .from('papers')
+                .update({
+                    eid: paper.eid,
+                    cited_by: paper.cited_by,
+                    journal: paper.journal ?? existingPaper.journal,
+                    doi: paper.doi ?? existingPaper.doi,
+                })
+                .eq('id', paperId);
+            if (updError) {
+                console.error('[Scopus Paper Update Error]', { paperId, eid: paper.eid, error: updError.message });
+                results.errors++;
+                continue;
+            }
+            results.updated++;
+            console.log('[Scopus Paper Updated]', { paperId, eid: paper.eid });
+        } else {
+            const { data: createdPaper, error: createError } = await supabase
+                .from('papers')
+                .insert({
+                    eid: paper.eid,
+                    title: paper.title,
+                    publish_year: paper.publish_year,
+                    authors_raw: paper.authors_raw,
+                    cited_by: paper.cited_by,
+                    journal: paper.journal,
+                    doi: paper.doi,
+                    source: 'scopus',
+                    status: 'DRAFT_AUTO'
+                })
+                .select('id,eid')
+                .single();
+            if (createError) {
+                console.error('[Scopus Paper Create Error]', { eid: paper.eid, error: createError.message });
+                results.errors++;
+                continue;
+            }
+            paperId = createdPaper.id;
+            results.created++;
+            console.log('[Scopus Paper Created]', { paperId, eid: paper.eid });
+        }
+
+        // Step 4: Check/create user-paper relation
+        const { data: existingLink, error: linkLookupError } = await supabase
+            .from('paper_authors')
+            .select('id')
+            .eq('paper_id', paperId)
+            .eq('user_id', userId)
+            .maybeSingle();
+        if (linkLookupError) {
+            console.error('[Scopus Link Lookup Error]', { paperId, error: linkLookupError.message });
+            results.errors++;
+            continue;
+        }
+
+        if (existingLink) {
+            results.alreadyLinked++;
+        } else {
+            const { error: linkError } = await supabase
+                .from('paper_authors')
+                .insert({ paper_id: paperId, user_id: userId, status: 'PENDING' });
+            if (linkError) {
+                console.error('[Scopus Link Create Error]', { paperId, error: linkError.message });
+                results.errors++;
+            } else {
+                results.linked++;
+                console.log('[Scopus Link Created]', { paperId, userId });
+            }
+        }
+    }
+
+    // Co-author matching (keep existing logic)
+    const { data: allUsers } = await supabase
+        .from('users')
+        .select('id, name_en, name_th');
+
+    // Note: co-author matching is skipped for scopus papers to avoid duplicate relations
+    // The above loop already creates the user-paper relation for the syncing user
+
+    console.log(`[Scopus Sync] User ${userId}: ${JSON.stringify(results)}`);
+
+    return results;
+}
 
 const getPaperDetailsByEid = async (eid) => {
   try {
@@ -95,35 +303,102 @@ const searchAuthorByName = async (name) => {
   }
 };
 
-const getAuthorPapers = async (authorId) => {
+async function getAuthorPapers(authorId) {
+  const count = 25;
+  let start = 0;
+  let total = null;
+  let page = 0;
+  const maxPages = 20;
+  const allEntries = [];
+
   try {
-    const response = await axios.get('https://api.elsevier.com/content/search/scopus', {
-      params: { 
-        query: `AU-ID(${authorId})`,
-        view: 'STANDARD',
-        count: 25
-      },
-      headers: {
+    do {
+      const headers = {
         'X-ELS-APIKey': process.env.SCOPUS_API_KEY,
-        'Accept': 'application/json'
-      }
+        Accept: 'application/json',
+        ...(process.env.SCOPUS_INST_TOKEN ? { 'X-ELS-Insttoken': process.env.SCOPUS_INST_TOKEN } : {}),
+      };
+
+      const response = await axios.get('https://api.elsevier.com/content/search/scopus', {
+        params: { query: `AU-ID(${authorId})`, view: 'STANDARD', count, start, sort: '-coverDate' },
+        headers
+      });
+
+      const results = response.data?.['search-results'];
+      const entries = Array.isArray(results?.entry) ? results.entry : [];
+
+      total = Number(results?.['opensearch:totalResults'] ?? 0);
+      const parsedTotal = Number.isFinite(total) ? total : allEntries.length + entries.length;
+      total = parsedTotal;
+
+      console.log('[Scopus API Response]', {
+        authorId,
+        page: page + 1,
+        status: response.status,
+        totalResults: total,
+        startIndex: Number(results?.['opensearch:startIndex'] ?? start),
+        itemsPerPage: Number(results?.['opensearch:itemsPerPage'] ?? entries.length),
+        entriesReceived: entries.length,
+      });
+
+      if (entries.length === 0) break;
+      allEntries.push(...entries);
+      start += entries.length;
+      page += 1;
+    } while (start < total && page < maxPages);
+
+    if (start < total && page >= maxPages) {
+      console.warn('[Scopus Pagination Limit Reached]', {
+        authorId, total, fetched: allEntries.length, maxPages
+      });
+    }
+
+    const missingEidEntries = allEntries.filter(entry => !entry.eid);
+    if (missingEidEntries.length > 0) {
+      console.warn('[Scopus Missing EID]', {
+        count: missingEidEntries.length,
+        titles: missingEidEntries.map(e => e['dc:title'])
+      });
+    }
+
+    const uniqueEntries = [
+      ...new Map(
+        allEntries.filter(entry => entry?.eid).map(entry => [entry.eid, entry])
+      ).values()
+    ];
+
+    console.log('[Scopus Search Complete]', {
+      authorId,
+      reportedTotal: total,
+      received: allEntries.length,
+      unique: uniqueEntries.length
     });
-    const entries = response.data['search-results']?.entry || [];
-    return entries.map(entry => ({
-      eid: entry['eid'],
-      title: entry['dc:title'],
-      year: entry['prism:coverDate'] ? entry['prism:coverDate'].substring(0, 4) : 'N/A',
-      journal: entry['prism:publicationName'] || '',
-      citedBy: entry['citedby-count'] || 0
+
+    return uniqueEntries.map(entry => ({
+      eid: entry.eid ?? null,
+      title: entry['dc:title']?.trim() || 'Untitled',
+      publish_year: entry['prism:coverDate'] ? Number(entry['prism:coverDate'].slice(0, 4)) : null,
+      authors_raw: entry['dc:creator'] ?? entry['author']?.map(a => a?.authname)?.filter(Boolean).join(', ') ?? '',
+      cited_by: Number(entry['citedby-count'] ?? 0),
+      journal: entry['prism:publicationName'] ?? null,
+      doi: entry['prism:doi'] ?? null,
+      source: 'scopus'
     }));
   } catch (error) {
-    console.error("Scopus Author Papers Error:", error.response?.data || error.message);
-    throw new Error('ไม่สามารถดึงรายการเปเปอร์ของอาจารย์ได้');
+    console.error('[Scopus Author Papers Error]', {
+      authorId,
+      status: error.response?.status,
+      headers: error.response?.headers,
+      data: error.response?.data,
+      message: error.message
+    });
+    throw new Error('ไม่สามารถดึงรายการผลงานจาก Scopus ได้');
   }
-};
+}
 
 module.exports = {
   getPaperDetailsByEid,
   searchAuthorByName,
-  getAuthorPapers
+  getAuthorPapers,
+  syncUserScopusData
 };

@@ -1087,7 +1087,7 @@ function computeClientCalculation(formState) {
                       }}
                     >
                       <GraduationCap size={18} />
-                      <span>🎓 ดึงข้อมูลจาก Google Scholar</span>
+                      <span> ดึงข้อมูล</span>
                     </button>
 
                     <button
@@ -1112,7 +1112,7 @@ function computeClientCalculation(formState) {
                       }}
                     >
                       <Sparkles size={18} />
-                      <span>✨ สกัดข้อมูลจาก PDF ด้วย AI</span>
+                      <span> สกัดข้อมูลจาก PDF ด้วย AI</span>
                     </button>
                   </div>
                 </div>

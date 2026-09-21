@@ -6,7 +6,8 @@ const { supabase, initDatabase } = require("./db");
 const authRoutes = require("./authRoutes");
 const { extractMetadataWithGemini } = require("./llmService");
 const {
-  getPaperDetailsByEid, searchAuthorByName, getAuthorPapers
+  getPaperDetailsByEid, searchAuthorByName, getAuthorPapers,
+  syncUserScopusData
 } = require("./scopusService");
 const {
   syncAllUsersScholarData,
@@ -409,6 +410,10 @@ app.get("/api/users/:userId/papers", async (req, res) => {
       .from("papers")
       .select(`
         paper_id:id,
+        eid,
+        scopus_id,
+        cited_by_count,
+        doi,
         title,
         publish_year,
         authors_raw,
@@ -416,7 +421,7 @@ app.get("/api/users/:userId/papers", async (req, res) => {
         scholar_url,
         source,
         paper_status:status,
-        paper_authors (
+        paper_authors!inner (
           author_entry_id:id,
           contribution_percent,
           is_first_author,
@@ -431,6 +436,13 @@ app.get("/api/users/:userId/papers", async (req, res) => {
 
     if (error) throw error;
 
+    console.log('[Papers API Response]', {
+      userId,
+      count: rows?.length ?? 0,
+      scopusCount: rows?.filter(p => Boolean(p.eid)).length ?? 0,
+      scholarCount: rows?.filter(p => p.source === 'scholar' || p.source === 'google_scholar').length ?? 0
+    });
+
     // Flatten nested data
     const formattedRows = [];
     for (const paper of (rows || [])) {
@@ -438,6 +450,10 @@ app.get("/api/users/:userId/papers", async (req, res) => {
       for (const pa of authors) {
         formattedRows.push({
           paper_id: paper.paper_id,
+          eid: paper.eid,
+          scopus_id: paper.scopus_id,
+          cited_by_count: paper.cited_by_count,
+          doi: paper.doi,
           title: paper.title,
           publish_year: paper.publish_year,
           authors_raw: paper.authors_raw,
@@ -501,6 +517,17 @@ app.post("/api/sync-scholar/:userId", async (req, res) => {
   } catch (error) {
     console.error(`[Sync Scholar User ${userId} Error]:`, error);
     res.status(500).json({ error: "Sync user failed", details: error.message });
+  }
+});
+
+app.post("/api/sync-scopus/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const result = await syncUserScopusData(userId);
+    res.json({ message: `Sync completed for user ${userId}`, data: result });
+  } catch (error) {
+    console.error(`[Sync Scopus User ${userId} Error]:`, error);
+    res.status(500).json({ error: "Sync Scopus failed", details: error.message });
   }
 });
 
