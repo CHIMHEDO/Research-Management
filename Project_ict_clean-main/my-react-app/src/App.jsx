@@ -1936,7 +1936,7 @@ function computeClientCalculation(formState) {
                                 )}
                                 {summary.expiry.isExpired && (
                                   <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>
-                                    ⏳ หมดอายุ 5 ปี
+                                    ⏳ ไม่สามารถใช้ได้ในหลักสูตร
                                   </span>
                                 )}
                                 {summary.expiry.isExpiring && (

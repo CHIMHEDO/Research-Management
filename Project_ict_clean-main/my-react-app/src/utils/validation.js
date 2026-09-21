@@ -79,15 +79,15 @@ export function getPaperAlertSummary(paper) {
     alerts.push({
       type: "expired",
       level: "danger",
-      title: "ผลงานหมดอายุความรอบหลักสูตร",
-      description: "ผลงานมีอายุเกิน 5 ปี ไม่สามารถนำไปใช้ในรอบหลักสูตรล่าสุดได้"
+      title: "ไม่สามารถใช้ได้ในหลักสูตร",
+      description: "ผลงานมีอายุเกินรอบ 5 ปี ไม่สามารถนำไปใช้ในรอบหลักสูตรปัจจุบันได้"
     });
   } else if (expiry.isExpiring) {
     alerts.push({
       type: "expiring",
       level: expiry.urgency >= 3 ? "danger" : "warning",
-      title: `ผลงานใกล้หมดอายุความ (${expiry.badgeText})`,
-      description: `หมดอายุวันที่ ${expiry.expiryDateFormatted}`
+      title: `ผลงานใกล้ครบกำหนด 5 ปี (${expiry.badgeText})`,
+      description: `สิ้นสุดการใช้ในหลักสูตรวันที่ ${expiry.expiryDateFormatted}`
     });
   }
 

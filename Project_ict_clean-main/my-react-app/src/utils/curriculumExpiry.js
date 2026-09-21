@@ -69,8 +69,8 @@ export function getCurriculumExpiryStatus(dateStr, customNow = null) {
     return {
       status: "EXPIRED",
       statusKey: "expired",
-      statusLabel: "ไม่สามารถใช้ในหลักสูตรล่าสุดได้",
-      badgeText: "ไม่สามารถใช้ในหลักสูตรล่าสุดได้",
+      statusLabel: "ไม่สามารถใช้ได้ในหลักสูตร",
+      badgeText: "ไม่สามารถใช้ได้ในหลักสูตร",
       badgeColor: "expired", // gray/slate
       urgency: 0,
       isExpiring: false,
