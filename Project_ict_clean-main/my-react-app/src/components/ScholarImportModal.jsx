@@ -46,13 +46,8 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
     api.get('/users')
       .then(res => {
         setUsers(res.data);
-<<<<<<< HEAD
         setAuthorsList(res.data);
-        // Default เลือกอาจารย์ที่ล็อกอินอยู่ หรือคนแรก
-        if (user && user.id) {
-=======
         if (user) {
->>>>>>> ff1f34cfbe583cee69c4b1515f985368d82d5fc5
           const matched = res.data.find(u => u.id === user.id || u.email === user.email);
           setSelectedUserId(matched ? matched.id : (user.id || res.data[0]?.id || null));
         }
@@ -478,7 +473,6 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
               <span style={{ fontSize: '13px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>
                 อาจารย์ผู้จัดทำ:
               </span>
-<<<<<<< HEAD
               <select
                 className="form-control"
                 style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', width: '100%' }}
@@ -491,7 +485,6 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                   </option>
                 ))}
               </select>
-=======
               <div style={{
                 padding: '6px 14px',
                 background: '#f8fafc',
@@ -510,7 +503,6 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                   {currentUserObj?.department || user?.department || 'ICT'}
                 </span>
               </div>
->>>>>>> ff1f34cfbe583cee69c4b1515f985368d82d5fc5
             </div>
 
             <button
