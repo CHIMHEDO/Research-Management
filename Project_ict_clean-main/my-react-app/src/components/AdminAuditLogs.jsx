@@ -225,7 +225,6 @@ export default function AdminAuditLogs({ entries = [] }) {
                       </td>
                       <td style={{ padding: '14px 18px' }}>
                         <div style={{ fontWeight: '700', color: '#1e293b' }}>{log.actorName}</div>
-                        <div style={{ fontSize: '11px', color: '#64748b' }}>สิทธิ์: {log.actorRole}</div>
                       </td>
                       <td style={{ padding: '14px 18px' }}>
                         <div style={{ fontWeight: '700', color: '#1e293b' }}>{log.targetTitle}</div>
