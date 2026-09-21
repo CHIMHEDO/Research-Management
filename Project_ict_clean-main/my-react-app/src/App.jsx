@@ -21,7 +21,8 @@ import {
   Globe,
   Calendar,
   GraduationCap,
-  BarChart3
+  BarChart3,
+  Mail
 } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import LoginPage from "./components/LoginPage";
@@ -734,6 +735,87 @@ function computeClientCalculation(formState) {
     }
 
     return '';
+  };
+
+  // 🔧 Helper: ดึงอีเมลของ First author และ Corresponding author สำหรับผลงานที่มีผู้แต่งมากกว่า 1 คน
+  const getPaperContactEmails = (entry, staffList = []) => {
+    if (!entry) return null;
+
+    const authorList = Array.isArray(entry.author_list) && entry.author_list.length > 0
+      ? entry.author_list
+      : Array.isArray(entry.authorList) && entry.authorList.length > 0
+        ? entry.authorList
+        : [];
+
+    let isMulti = false;
+    if (authorList.length > 1) {
+      isMulti = true;
+    } else if (authorList.length === 1) {
+      isMulti = false;
+    } else if (entry.authors) {
+      const splitNames = entry.authors.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+      isMulti = splitNames.length > 1;
+    }
+
+    // หากไม่ใช่งานวิจัยหลายคน (1 คน) ไม่ต้องแสดง
+    if (!isMulti) return null;
+
+    let firstAuthorName = "";
+    let corrAuthorName = "";
+
+    if (authorList.length > 0) {
+      const first = authorList.find(a => isFirstRole(a.role)) || authorList[0];
+      const corr = authorList.find(a => isCorrespondingRole(a.role) && a !== first);
+      firstAuthorName = first?.name || "";
+      corrAuthorName = corr?.name || entry.correspondingAuthor || "";
+    } else if (entry.authors) {
+      const names = entry.authors.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+      firstAuthorName = names[0] || entry.authorName || "";
+      corrAuthorName = entry.correspondingAuthor || "";
+    } else {
+      firstAuthorName = entry.authorName || "";
+      corrAuthorName = entry.correspondingAuthor || "";
+    }
+
+    const findEmail = (name) => {
+      if (!name || !staffList || staffList.length === 0) return null;
+      const clean = normalizeName(name);
+      if (!clean) return null;
+
+      const matched = staffList.find(s => {
+        const en = normalizeName(s.name_en);
+        const th = normalizeName(s.name_th);
+        const full = normalizeName(s.full_name);
+        return clean === en || clean === th || clean === full ||
+               (en && (en.includes(clean) || clean.includes(en))) ||
+               (th && (th.includes(clean) || clean.includes(th))) ||
+               (full && (full.includes(clean) || clean.includes(full)));
+      });
+      return matched?.email || null;
+    };
+
+    const firstEmail = findEmail(firstAuthorName);
+    const corrEmail = corrAuthorName ? findEmail(corrAuthorName) : null;
+
+    const contacts = [];
+    if (firstEmail) {
+      contacts.push({ role: 'First author', name: firstAuthorName, email: firstEmail });
+    }
+    if (corrEmail && corrEmail !== firstEmail) {
+      contacts.push({ role: 'Corresponding author', name: corrAuthorName, email: corrEmail });
+    }
+
+    if (contacts.length === 0 && entry.submitter_email) {
+      contacts.push({ role: 'ผู้บันทึกผลงาน', name: firstAuthorName || corrAuthorName || 'ผู้จัดทำ', email: entry.submitter_email });
+    }
+
+    return {
+      isMulti,
+      contacts,
+      firstAuthorName,
+      corrAuthorName,
+      fallbackEmail: contacts.length === 0 ? (entry.submitter_email || null) : null
+    };
   };
 
   // ฟังก์ชันบันทึกข้อมูลไปยัง Backend
@@ -2189,6 +2271,53 @@ function computeClientCalculation(formState) {
                             <p>{e.abstract}</p>
                           </details>
                         )}
+
+                        {/* Proportion Feedback Notice (Only for Multi-Author Papers) */}
+                        {(() => {
+                          const contactInfo = getPaperContactEmails(e, staffList);
+                          if (!contactInfo || !contactInfo.isMulti) return null;
+
+                          const hasContacts = contactInfo.contacts.length > 0;
+                          const fallbackTxt = contactInfo.fallbackEmail || (contactInfo.firstAuthorName ? `ผู้แต่ง (${contactInfo.firstAuthorName})` : "ผู้แต่งผลงาน");
+
+                          return (
+                            <div className="card-proportion-notice" style={{
+                              marginTop: "12px",
+                              padding: "8px 12px",
+                              backgroundColor: "#f8fafc",
+                              border: "1px dashed #cbd5e1",
+                              borderRadius: "8px",
+                              fontSize: "12px",
+                              color: "#475569",
+                              display: "flex",
+                              alignItems: "flex-start",
+                              gap: "8px",
+                              lineHeight: 1.45
+                            }}>
+                              <Mail size={14} color="#6366f1" style={{ flexShrink: 0, marginTop: "2px" }} />
+                              <div>
+                                <span>หากท่านไม่พึงพอใจในสัดส่วนนี้ โปรดติดต่อ: </span>
+                                {hasContacts ? (
+                                  contactInfo.contacts.map((c, idx) => (
+                                    <span key={idx}>
+                                      {idx > 0 && " หรือ "}
+                                      <a
+                                        href={`mailto:${c.email}?subject=ขอปรึกษาเรื่องสัดส่วนผลงาน: ${encodeURIComponent(e.title || '')}`}
+                                        style={{ color: "#4f46e5", fontWeight: "600", textDecoration: "underline" }}
+                                        title={`ส่งอีเมลถึง ${c.name} (${c.role})`}
+                                      >
+                                        {c.email}
+                                      </a>
+                                      <span style={{ color: "#64748b", fontSize: "11px" }}> ({c.role})</span>
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ color: "#4f46e5", fontWeight: "600" }}>{fallbackTxt}</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -2243,6 +2372,29 @@ function computeClientCalculation(formState) {
                         <td className="table-title-cell">
                           <div className="table-title-text">{e.title || e.type}</div>
                           <div style={{ fontSize: 12, color: "#64748b" }}>{e.journal || e.type}</div>
+                          {(() => {
+                            const contactInfo = getPaperContactEmails(e, staffList);
+                            if (!contactInfo || !contactInfo.isMulti) return null;
+                            const hasContacts = contactInfo.contacts.length > 0;
+                            return (
+                              <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                                <Mail size={12} color="#6366f1" />
+                                <span>ไม่พึงพอใจสัดส่วนโปรดติดต่อ: </span>
+                                {hasContacts ? (
+                                  contactInfo.contacts.map((c, idx) => (
+                                    <span key={idx}>
+                                      {idx > 0 && ", "}
+                                      <a href={`mailto:${c.email}`} style={{ color: "#4f46e5", textDecoration: "underline" }}>
+                                        {c.email}
+                                      </a>
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span style={{ color: "#4f46e5" }}>{contactInfo.fallbackEmail || "ผู้จัดทำ"}</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td>{renderDbBadge(e.db)}</td>
                         <td>
