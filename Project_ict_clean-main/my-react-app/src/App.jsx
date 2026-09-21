@@ -855,11 +855,50 @@ function computeClientCalculation(formState) {
     }
   };
 
+  // 👤 กรองเฉพาะผลงานของผู้ใช้ปัจจุบัน (ถ้าเป็น Admin จะเห็นทุกรายการในหน้าแดชบอร์ด/คอนโซล)
+  const userEntries = useMemo(() => {
+    if (!user) return [];
+    if (user.role === 'admin') return entries;
+
+    const userEmail = (user.email || '').toLowerCase().trim();
+    const userNameEn = (user.name_en || '').toLowerCase().trim();
+    const userNameTh = (user.name_th || '').toLowerCase().trim();
+    const userFullName = (user.full_name || '').toLowerCase().trim();
+    const userId = user.id ? String(user.id) : '';
+
+    return entries.filter(e => {
+      // 1. ตรวจสอบจาก user_id / userId ที่บันทึก
+      if (userId && (String(e.user_id) === userId || String(e.userId) === userId)) {
+        return true;
+      }
+
+      // 2. ตรวจสอบจาก email ผู้บันทึก
+      const submitterEmail = (e.submitter_email || '').toLowerCase().trim();
+      if (userEmail && submitterEmail && submitterEmail === userEmail) {
+        return true;
+      }
+
+      // 3. ตรวจสอบจากชื่อผู้ยื่น (authorName)
+      const authorName = (e.authorName || e.author_name || '').toLowerCase().trim();
+      if (userNameTh && authorName && (authorName.includes(userNameTh) || userNameTh.includes(authorName))) return true;
+      if (userNameEn && authorName && (authorName.includes(userNameEn) || userNameEn.includes(authorName))) return true;
+      if (userFullName && authorName && (authorName.includes(userFullName) || userFullName.includes(authorName))) return true;
+
+      // 4. ตรวจสอบว่ามีชื่อใน authors list หรือไม่
+      const authors = (e.authors || '').toLowerCase().trim();
+      if (userNameTh && authors && authors.includes(userNameTh)) return true;
+      if (userNameEn && authors && authors.includes(userNameEn)) return true;
+      if (userFullName && authors && authors.includes(userFullName)) return true;
+
+      return false;
+    });
+  }, [entries, user]);
+
   // ข้อมูลรอบปีภาระงานปัจจุบัน (เช่น กรกฎาคม 69 - มิถุนายน 70)
   const currentCycleInfo = useMemo(() => getWorkloadCycleInfo(new Date()), []);
   const [selectedCycleFilter, setSelectedCycleFilter] = useState("CURRENT"); // 'CURRENT' | cycleKey | 'ALL'
 
-  // รวมรายการรอบปีภาระงานทั้งหมดที่มีในข้อมูล
+  // รวมรายการรอบปีภาระงานทั้งหมดที่มีในข้อมูลของผู้ใช้
   const availableCycles = useMemo(() => {
     const cycleMap = new Map();
     if (currentCycleInfo) {
@@ -871,7 +910,7 @@ function computeClientCalculation(formState) {
       });
     }
 
-    entries.forEach(entry => {
+    userEntries.forEach(entry => {
       const pDate = entry.publicationDate || entry.date;
       const cInfo = entry.dateInfo?.workloadCycleKey 
         ? {
@@ -896,7 +935,7 @@ function computeClientCalculation(formState) {
     });
 
     return Array.from(cycleMap.values()).sort((a, b) => b.startBe - a.startBe);
-  }, [entries, currentCycleInfo]);
+  }, [userEntries, currentCycleInfo]);
 
   const activeCycleKey = selectedCycleFilter === "CURRENT" ? (currentCycleInfo?.cycleKey || "") : selectedCycleFilter;
   const activeCycleObj = availableCycles.find(c => c.key === activeCycleKey);
@@ -906,14 +945,14 @@ function computeClientCalculation(formState) {
 
   // กรองรายการตามรอบปีภาระงาน (เพื่อคำนวณชั่วโมงสะสม & สถิติ)
   const cycleFilteredEntries = useMemo(() => {
-    if (selectedCycleFilter === "ALL") return entries;
+    if (selectedCycleFilter === "ALL") return userEntries;
     const targetKey = activeCycleKey;
-    return entries.filter(e => {
+    return userEntries.filter(e => {
       const pDate = e.publicationDate || e.date;
       const cycleKey = e.dateInfo?.workloadCycleKey || (pDate ? getWorkloadCycleInfo(pDate)?.cycleKey : null);
       return cycleKey === targetKey;
     });
-  }, [entries, selectedCycleFilter, activeCycleKey]);
+  }, [userEntries, selectedCycleFilter, activeCycleKey]);
 
   // สรุปยอดตามรอบปีภาระงาน
   const totals = useMemo(() => {
@@ -928,9 +967,9 @@ function computeClientCalculation(formState) {
       faculty,
       uni,
       count: cycleFilteredEntries.length,
-      allCount: entries.length
+      allCount: userEntries.length
     };
-  }, [cycleFilteredEntries, entries.length]);
+  }, [cycleFilteredEntries, userEntries.length]);
 
   // สถิติตาม 4 หมวดหมู่หลัก (จำนวนชิ้นผลงาน)
   const categoryStats = useMemo(() => {
@@ -1053,11 +1092,11 @@ function computeClientCalculation(formState) {
   return (
     <div className="app-layout">
       {/* Left Sidebar Navigation */}
-      <Sidebar tab={tab} setTab={setTab} entriesCount={entries.length} />
+      <Sidebar tab={tab} setTab={setTab} entriesCount={userEntries.length} />
 
       {/* Main Content Area */}
       <div className="app-content-wrapper">
-        <Header tab={tab} setTab={setTab} entries={entries} />
+        <Header tab={tab} setTab={setTab} entries={userEntries} />
 
         <main className="app-main">
           {tab === "form" && (

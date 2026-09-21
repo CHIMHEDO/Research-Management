@@ -125,6 +125,9 @@ function formatEntry(row) {
 
   return {
     id: row.id,
+    user_id: row.user_id || null,
+    userId: row.user_id || null,
+    submitter_email: (dateInfo && dateInfo.submitter_email) || null,
     title: row.title || "",
     authors: row.authors || "",
     author: row.author,
@@ -227,8 +230,14 @@ app.post("/api/entries", async (req, res) => {
       };
     }
 
+    if (req.body.userEmail || req.body.user_email) {
+      parsedDateInfo.submitter_email = req.body.userEmail || req.body.user_email;
+    }
+
     const entryData = {
-      id, title: title || null, authors: authors || null, author: author || null,
+      id, 
+      user_id: req.body.userId || req.body.user_id || null,
+      title: title || null, authors: authors || null, author: author || null,
       author_name: authorName || null, affiliations: affiliations || null,
       corresponding_author: correspondingAuthor || null, publication_date: pubDate,
       doi: doi || null, journal: journal || null, volume: volume || null,
