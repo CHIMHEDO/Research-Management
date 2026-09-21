@@ -169,7 +169,7 @@ async function findAuthorEmailByName(authorName) {
  */
 async function sendCoAuthorConfirmationEmail({ toEmail, recipientName, submitterName, paperTitle, submitterProportion, authorList, frontendUrl }) {
   const transporter = createTransporter();
-  const siteUrl = frontendUrl || process.env.FRONTEND_URL || 'http://localhost:5173';
+  const siteUrl = frontendUrl || process.env.FRONTEND_URL || 'https://research-management-9vlg.vercel.app';
   const configuredFrom = process.env.SMTP_FROM && !process.env.SMTP_FROM.includes('your-email') ? process.env.SMTP_FROM : null;
   const fromEmail = configuredFrom || process.env.SMTP_USER || 'no-reply@up.ac.th';
 
@@ -183,10 +183,10 @@ async function sendCoAuthorConfirmationEmail({ toEmail, recipientName, submitter
         </div>
         <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #ffffff; border-radius: 6px; overflow: hidden; border: 1px solid #e2e8f0;">
           <thead>
-            <tr style="background: #f1f5f9; color: #475569; text-align: left;">
-              <th style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">บทบาท</th>
-              <th style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0;">ชื่อ-นามสกุล</th>
-              <th style="padding: 8px 12px; border-bottom: 1px solid #e2e8f0; text-align: center;">สัดส่วน (%)</th>
+            <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left;">
+              <th style="padding: 8px 12px; color: #475569;">บทบาท</th>
+              <th style="padding: 8px 12px; color: #475569;">ชื่อผู้แต่ง</th>
+              <th style="padding: 8px 12px; text-align: center; color: #475569;">สัดส่วน (%)</th>
             </tr>
           </thead>
           <tbody>
