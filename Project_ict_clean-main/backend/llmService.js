@@ -6,44 +6,65 @@ console.log('[LLM] GEMINI_API_KEY:', process.env.GEMINI_API_KEY ? "✓ โหล
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 const MODEL_PRIMARY = "gemini-3.6-flash";
-const MODEL_FALLBACK = "gemini-2.5-flash";
+const MODEL_FALLBACK = "gemini-1.5-flash";
 
 async function callModelWithFallback(prompt, responseSchema = null) {
     const models = [MODEL_PRIMARY, MODEL_FALLBACK];
+    const MAX_RETRIES_PRIMARY = 1;
+    const RETRY_DELAY_MS = 2500;
     
     for (let i = 0; i < models.length; i++) {
         const modelName = models[i];
-        try {
-            const generationConfig = { 
-                responseMimeType: "application/json" 
-            };
-            
-            if (responseSchema) {
-                generationConfig.responseSchema = responseSchema;
-            }
-            
-            const model = genAI.getGenerativeModel({ 
-                model: modelName,
-                generationConfig: generationConfig
-            });
-            
-            const result = await model.generateContent(prompt);
-            const responseText = result.response.text();
-            
-            if (i > 0) {
-                console.log(`[LLM Fallback] Using fallback model: ${modelName}`);
-            }
-            
-            return responseText;
-            
-        } catch (error) {
-            const isLastModel = i === models.length - 1;
-            const isNotFound = error.message.includes('404') || error.message.includes('not found');
-            
-            console.warn(`[LLM Warning] Model "${modelName}" failed: ${error.message}`);
-            
-            if (isLastModel || !isNotFound) {
-                throw error;
+        const isPrimary = i === 0;
+        const attempts = isPrimary ? MAX_RETRIES_PRIMARY + 1 : 1;
+        
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            try {
+                const generationConfig = { 
+                    responseMimeType: "application/json" 
+                };
+                
+                if (responseSchema) {
+                    generationConfig.responseSchema = responseSchema;
+                }
+                
+                const model = genAI.getGenerativeModel({ 
+                    model: modelName,
+                    generationConfig: generationConfig
+                });
+                
+                const result = await model.generateContent(prompt);
+                const responseText = result.response.text();
+                
+                if (i > 0) {
+                    console.log(`[LLM Fallback] Using fallback model: ${modelName}`);
+                } else if (attempt > 0) {
+                    console.log(`[LLM Retry] Model "${modelName}" succeeded on retry ${attempt + 1}`);
+                }
+                
+                return responseText;
+                
+            } catch (error) {
+                const isLastModel = i === models.length - 1;
+                const isLastAttempt = attempt === attempts - 1;
+                const is503 = error.status === 503 || error.message?.includes('503');
+                const is404 = error.message?.includes('404') || error.message?.includes('not found');
+                
+                console.warn(`[LLM Warning] Model "${modelName}" failed (attempt ${attempt + 1}/${attempts}): ${error.message}`);
+                
+                if (isLastModel && isLastAttempt) {
+                    throw error;
+                }
+                
+                if (isPrimary && is503 && !isLastAttempt) {
+                    console.warn(`[LLM Retry] 503 error detected, retrying in ${RETRY_DELAY_MS}ms...`);
+                    await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                    continue;
+                }
+                
+                if (!is503 || isLastAttempt) {
+                    break;
+                }
             }
         }
     }
@@ -146,26 +167,46 @@ ${pdfBase64}
 จงคืนค่าคำตอบเป็น JSON เท่านั้น ตามโครงสร้างข้างต้น ห้ามมี markdown หรือ explanation`;
 
     let result;
-    try {
-        const model = genAI.getGenerativeModel({ 
-            model: MODEL_PRIMARY,
-            generationConfig: { responseMimeType: "application/json", responseSchema }
-        });
-
-        console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลหลัก)...');
-        result = await model.generateContent([filePart, prompt]);
-    } catch (error) {
-        console.warn(`[Gemini Extract] โมเดลหลัก ${MODEL_PRIMARY} ล่ม (${error.status})... สลับไปใช้โมเดลสำรอง: ${MODEL_FALLBACK}`);
+    const MAX_RETRIES = 1;
+    const RETRY_DELAY_MS = 2500;
+    
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const fallbackModel = genAI.getGenerativeModel({ 
-                model: MODEL_FALLBACK,
+            const model = genAI.getGenerativeModel({ 
+                model: MODEL_PRIMARY,
                 generationConfig: { responseMimeType: "application/json", responseSchema }
             });
-            console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลสำรอง)...');
-            result = await fallbackModel.generateContent([filePart, prompt]);
-        } catch (fallbackError) {
-            console.error('[Gemini Extract Error]: โมเดลสำรองก็ล่มเช่นกัน:', fallbackError.message);
-            throw fallbackError;
+
+            console.log(`[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลหลัก, พยายาม ${attempt + 1}/${MAX_RETRIES + 1})...`);
+            result = await model.generateContent([filePart, prompt]);
+            
+            if (attempt > 0) {
+                console.log(`[Gemini Extract] โมเดลหลักสำเร็จหลัง retry ${attempt}`);
+            }
+            break;
+        } catch (error) {
+            const is503 = error.status === 503 || error.message?.includes('503');
+            const isLastAttempt = attempt === MAX_RETRIES;
+            
+            if (is503 && !isLastAttempt) {
+                console.warn(`[Gemini Extract] โมเดลหลักล่ม 503, รอ ${RETRY_DELAY_MS}ms แล้วลองใหม่...`);
+                await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+                continue;
+            }
+            
+            console.warn(`[Gemini Extract] โมเดลหลัก ${MODEL_PRIMARY} ล่ม (${error.status || error.message})... สลับไปใช้โมเดลสำรอง: ${MODEL_FALLBACK}`);
+            try {
+                const fallbackModel = genAI.getGenerativeModel({ 
+                    model: MODEL_FALLBACK,
+                    generationConfig: { responseMimeType: "application/json", responseSchema }
+                });
+                console.log('[Gemini Extract] กำลังส่ง PDF ให้ Gemini สกัดข้อมูล (โมเดลสำรอง)...');
+                result = await fallbackModel.generateContent([filePart, prompt]);
+            } catch (fallbackError) {
+                console.error('[Gemini Extract Error]: โมเดลสำรองก็ล่มเช่นกัน:', fallbackError.message);
+                throw fallbackError;
+            }
+            break;
         }
     }
 

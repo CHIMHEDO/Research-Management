@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { supabase } = require('./db');
+const { normalizeKeywords } = require('./utils/keywords');
 require('dotenv').config();
 
 /**
@@ -917,6 +918,96 @@ async function fetchPaperDetailFromUrl(detailUrl) {
     }
 }
 
+/**
+ * Enrich paper metadata from DOI using Crossref/OpenAlex
+ * This is called from the backend DOI enrichment endpoint
+ */
+async function enrichPaperFromDoi(doi) {
+  const { enrichByDoi } = require('./crossrefService');
+  return await enrichByDoi(doi);
+}
+
+/**
+ * DOI-first enrichment with Scholar scraping fallback
+ * Used when user clicks "นำไปคำนวณ" on a Scholar paper
+ */
+async function enrichPaperWithFallback(paper, userId) {
+  const enrichedPaper = { ...paper };
+  
+  // Helper to check if field needs enrichment
+  const isBlank = (value) =>
+    value == null ||
+    (typeof value === 'string' && value.trim() === '') ||
+    (Array.isArray(value) && value.length === 0);
+
+  const needsEnrichment = 
+    isBlank(enrichedPaper.abstract) ||
+    isBlank(enrichedPaper.keywords) ||
+    isBlank(enrichedPaper.volume) ||
+    isBlank(enrichedPaper.issue);
+
+  if (!needsEnrichment) {
+    return enrichedPaper;
+  }
+
+  // Try DOI enrichment first (if paper has DOI)
+  if (enrichedPaper.doi) {
+    try {
+      console.log(`[Scholar Enrichment] Trying DOI enrichment for: ${enrichedPaper.doi}`);
+      const result = await enrichPaperFromDoi(enrichedPaper.doi);
+      if (result.success) {
+        // Merge enriched data, preserving original Scholar data
+        const data = result.data;
+        enrichedPaper.abstract = enrichedPaper.abstract || data.abstract || '';
+        // Ensure keywords are normalized as array
+        const enrichedKeywords = normalizeKeywords(data.keywords);
+        enrichedPaper.keywords = enrichedPaper.keywords?.length ? enrichedPaper.keywords : enrichedKeywords;
+        enrichedPaper.volume = enrichedPaper.volume || data.volume || '';
+        enrichedPaper.issue = enrichedPaper.issue || data.issue || '';
+        enrichedPaper.journal = enrichedPaper.journal || data.journal || '';
+        enrichedPaper.publicationDate = enrichedPaper.publicationDate || data.publicationDate || '';
+        enrichedPaper.metadata_source = result.source;
+        enrichedPaper.metadata_enriched_at = new Date().toISOString();
+        enrichedPaper.enrichment_status = 'enriched';
+        console.log(`[Scholar Enrichment] DOI enrichment successful via ${result.source}`);
+        return enrichedPaper;
+      }
+    } catch (doiErr) {
+      console.warn(`[Scholar Enrichment] DOI enrichment failed:`, doiErr.message);
+    }
+  }
+
+  // Fallback: Scholar detail page scraping (only if paper has scholar_url)
+  if (enrichedPaper.scholar_url) {
+    try {
+      console.log(`[Scholar Enrichment] Falling back to Scholar scraping for: ${enrichedPaper.scholar_url}`);
+      const scrapedDetail = await fetchPaperDetailFromUrl(enrichedPaper.scholar_url);
+      
+      // Merge scraped data, preserving original Scholar data
+      enrichedPaper.abstract = enrichedPaper.abstract || scrapedDetail.abstract || '';
+      // Ensure keywords are normalized as array
+      const scrapedKeywords = normalizeKeywords(scrapedDetail.keywords);
+      enrichedPaper.keywords = enrichedPaper.keywords?.length ? enrichedPaper.keywords : scrapedKeywords;
+      enrichedPaper.volume = enrichedPaper.volume || scrapedDetail.volume || '';
+      enrichedPaper.issue = enrichedPaper.issue || scrapedDetail.issue || '';
+      enrichedPaper.journal = enrichedPaper.journal || scrapedDetail.journal || '';
+      enrichedPaper.publicationDate = enrichedPaper.publicationDate || scrapedDetail.publicationDate || scrapedDetail.year || '';
+      enrichedPaper.doi = enrichedPaper.doi || scrapedDetail.doi || '';
+      enrichedPaper.metadata_source = 'scholar_scraping';
+      enrichedPaper.metadata_enriched_at = new Date().toISOString();
+      enrichedPaper.enrichment_status = 'enriched';
+      console.log(`[Scholar Enrichment] Scholar scraping successful`);
+      return enrichedPaper;
+    } catch (scrapeErr) {
+      console.warn(`[Scholar Enrichment] Scholar scraping failed:`, scrapeErr.message);
+    }
+  }
+
+  // No enrichment possible, return original
+  enrichedPaper.enrichment_status = 'failed';
+  return enrichedPaper;
+}
+
 module.exports = {
     cleanAndParsePaper,
     fetchRealisticMockData,
@@ -929,5 +1020,7 @@ module.exports = {
     getBlacklistByUser,
     unblacklistPaper,
     isPaperBlacklisted,
-    fetchPaperDetailFromUrl
+    fetchPaperDetailFromUrl,
+    enrichPaperFromDoi,
+    enrichPaperWithFallback
 };

@@ -124,6 +124,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
           });
           const detail = res.data;
           // Smart merge: only override paper fields with non-empty detail values
+          // Pass raw merged paper - normalization happens in handleImportFromScholar
           const mergedPaper = {
             ...paper,
             ...detail,
@@ -157,6 +158,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
     try {
       const res = await api.get(`/scopus/paper/${paper.eid}`);
       const detail = res.data;
+      // Pass raw merged paper - normalization happens in handleImportFromScholar
       const mergedPaper = {
         ...paper,
         ...detail,
@@ -166,7 +168,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
         journal: detail.journal || '',
         abstract: detail.abstract || '',
         doi: detail.doi || '',
-        keywords: detail.keywords || [],  // 🌟 ADD: Include keywords from Scopus detail API
+        keywords: detail.keywords || [],
         scholar_url: `https://www.scopus.com/abstract/uri/eid/${paper.eid}`
       };
       onSelectPaper(mergedPaper, currentUserObj);

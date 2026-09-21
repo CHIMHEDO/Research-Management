@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { supabase } = require('./db');
+const { normalizeKeywords } = require('./utils/keywords');
 require('dotenv').config();
 
 async function isPaperBlacklisted(userId, title) {
@@ -31,7 +32,16 @@ function cleanScopusPaper(paper) {
         authors_raw: paper.authors_raw ?? '',
         cited_by: Number(paper.cited_by ?? 0),
         journal: paper.journal ?? null,
+        volume: paper.volume ?? null,
+        issue: paper.issue ?? null,
         doi: paper.doi ?? null,
+        abstract: paper.abstract ?? '',
+        keywords: normalizeKeywords(
+            paper.authkeywords ||
+            paper.authorKeywords ||
+            paper.keywords
+        ),
+        publication_date: paper.coverDate ? paper.coverDate.split('T')[0] : null,
         source: 'scopus'
     };
 }
@@ -130,7 +140,12 @@ async function syncUserScopusData(userId) {
                     eid: paper.eid,
                     cited_by: paper.cited_by,
                     journal: paper.journal ?? existingPaper.journal,
+                    volume: paper.volume ?? existingPaper.volume,
+                    issue: paper.issue ?? existingPaper.issue,
                     doi: paper.doi ?? existingPaper.doi,
+                    abstract: paper.abstract ?? existingPaper.abstract,
+                    keywords: paper.keywords ?? existingPaper.keywords,
+                    publication_date: paper.publication_date ?? existingPaper.publication_date
                 })
                 .eq('id', paperId);
             if (updError) {
@@ -150,7 +165,12 @@ async function syncUserScopusData(userId) {
                     authors_raw: paper.authors_raw,
                     cited_by: paper.cited_by,
                     journal: paper.journal,
+                    volume: paper.volume,
+                    issue: paper.issue,
                     doi: paper.doi,
+                    abstract: paper.abstract,
+                    keywords: paper.keywords,
+                    publication_date: paper.publication_date,
                     source: 'scopus',
                     status: 'DRAFT_AUTO'
                 })
@@ -374,16 +394,64 @@ async function getAuthorPapers(authorId) {
       unique: uniqueEntries.length
     });
 
-    return uniqueEntries.map(entry => ({
-      eid: entry.eid ?? null,
-      title: entry['dc:title']?.trim() || 'Untitled',
-      publish_year: entry['prism:coverDate'] ? Number(entry['prism:coverDate'].slice(0, 4)) : null,
-      authors_raw: entry['dc:creator'] ?? entry['author']?.map(a => a?.authname)?.filter(Boolean).join(', ') ?? '',
-      cited_by: Number(entry['citedby-count'] ?? 0),
-      journal: entry['prism:publicationName'] ?? null,
-      doi: entry['prism:doi'] ?? null,
-      source: 'scopus'
-    }));
+    const mappedEntries = uniqueEntries.map(entry => {
+      const coverDate = entry['prism:coverDate'] || '';
+      const publishYear = coverDate ? Number(coverDate.slice(0, 4)) : null;
+      
+      // Parse authors from various possible fields
+      let authorsRaw = '';
+      if (entry['dc:creator']) {
+        authorsRaw = entry['dc:creator'];
+      } else if (entry.author && Array.isArray(entry.author)) {
+        authorsRaw = entry.author.map(a => a?.authname).filter(Boolean).join(', ');
+      } else if (entry.authors && Array.isArray(entry.authors)) {
+        authorsRaw = entry.authors.map(a => a?.authname || a?.['ce:indexed-name']).filter(Boolean).join(', ');
+      }
+
+      return {
+        eid: entry.eid ?? null,
+        title: entry['dc:title']?.trim() || 'Untitled',
+        publish_year: publishYear,
+        coverDate: coverDate, // Full date for publication_date
+        authors_raw: authorsRaw,
+        cited_by: Number(entry['citedby-count'] ?? 0),
+        journal: entry['prism:publicationName'] ?? null,
+        volume: entry['prism:volume'] ?? null,
+        issue: entry['prism:issueIdentifier'] ?? null,
+        doi: entry['prism:doi'] ?? null,
+        source: 'scopus',
+        // These fields may be empty in search results, will be filled by detail retrieval
+        abstract: '',
+        keywords: []
+      };
+    });
+
+    // For entries missing key fields, fetch details by EID
+    const entriesNeedingDetail = mappedEntries.filter(e => 
+      e.eid && (!e.abstract || !e.keywords?.length || !e.volume || !e.issue)
+    );
+
+    if (entriesNeedingDetail.length > 0) {
+      console.log(`[Scopus] Fetching details for ${entriesNeedingDetail.length} entries missing fields`);
+      for (const entry of entriesNeedingDetail) {
+        try {
+          const detail = await getPaperDetailsByEid(entry.eid);
+          if (detail) {
+            entry.abstract = detail.abstract || entry.abstract;
+            entry.keywords = detail.keywords || entry.keywords;
+            entry.volume = detail.volume || entry.volume;
+            entry.issue = detail.issue || entry.issue;
+            entry.journal = detail.journal || entry.journal;
+            entry.coverDate = detail.publishDate || entry.coverDate;
+            entry.doi = detail.doi || entry.doi;
+          }
+        } catch (detailErr) {
+          console.warn(`[Scopus] Detail fetch failed for ${entry.eid}:`, detailErr.message);
+        }
+      }
+    }
+
+    return mappedEntries;
   } catch (error) {
     console.error('[Scopus Author Papers Error]', {
       authorId,

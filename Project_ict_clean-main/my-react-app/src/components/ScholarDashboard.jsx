@@ -134,7 +134,7 @@ function PaperCard({ paper, currentUser, onConfirm, onReject, onImport, activeTa
           )}
           {activeTab === 'scopus' && paper.eid && (
             <a
-              href={`https://www.scopus.com/abstract/uri/eid/${encodeURIComponent(paper.eid)}`}
+              href={`https://www.scopus.com/record/display.uri?eid=${paper.eid}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ fontSize: '13px', color: '#4A148C', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: '500' }}
@@ -440,23 +440,10 @@ const scopusPapers = useMemo(() =>
     }
   };
 
-  const handleImportToForm = (paper) => {
-    const formData = {
-      title: paper.title || '',
-      authors: paper.authors_raw || '',
-      journal: paper.journal || '',
-      doi: paper.doi || '',
-      publicationDate: paper.publish_year ? `${paper.publish_year}-01-01` : '',
-      volume: paper.volume || '',
-      issue: paper.issue || '',
-      abstract: paper.abstract || '',
-      keywords: paper.keywords || '',
-      authorName: currentUser?.name_th || currentUser?.name_en || '',
-      correspondingAuthor: paper.corresponding_author || '',
-      proportion: paper.contribution_percent || 100,
-    };
+  const handleImportToForm = async (paper) => {
+    // Pass raw paper data directly - normalization happens in App.jsx handleImportFromScholar
     if (onImportToForm) {
-      onImportToForm(formData);
+      await onImportToForm(paper);
     }
   };
 

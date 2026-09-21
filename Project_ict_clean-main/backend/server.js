@@ -19,6 +19,7 @@ const {
   savePaperAndAuthor,
   fetchPaperDetailFromUrl
 } = require("./scholarService");
+const { enrichByDoi, findDoiByTitle } = require("./crossrefService");
 const { initScholarCron, getCronStatus } = require("./cronService");
 const { triggerCoAuthorNotificationWorkflow } = require("./emailService");
 require("dotenv").config();
@@ -240,7 +241,20 @@ app.post("/api/entries", async (req, res) => {
 
     if (req.body.id) {
       const { error } = await supabase.from("entries").delete().eq("id", req.body.id);
-      if (error) throw error;
+if (error) {
+      console.error('[Get User Papers Error]', {
+        userId,
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'GET_USER_PAPERS_FAILED',
+        message: error.message
+      });
+    }
     }
 
     let parsedDateInfo = dateInfo || {};
@@ -608,6 +622,15 @@ app.get("/api/users/:userId/papers", async (req, res) => {
         cited_by,
         scholar_url,
         source,
+        journal,
+        volume,
+        issue,
+        abstract,
+        keywords,
+        publication_date,
+        metadata_enriched_at,
+        metadata_source,
+        enrichment_status,
         paper_status:status,
         paper_authors!inner (
           author_entry_id:id,
@@ -648,6 +671,15 @@ app.get("/api/users/:userId/papers", async (req, res) => {
           cited_by: paper.cited_by,
           scholar_url: paper.scholar_url,
           source: paper.source,
+          journal: paper.journal,
+          volume: paper.volume,
+          issue: paper.issue,
+          abstract: paper.abstract,
+          keywords: paper.keywords,
+          publication_date: paper.publication_date,
+          metadata_enriched_at: paper.metadata_enriched_at,
+          metadata_source: paper.metadata_source,
+          enrichment_status: paper.enrichment_status,
           status: paper.paper_status,
           author_entry_id: pa.author_entry_id,
           contribution_percent: Number(pa.contribution_percent) || 0,
@@ -857,6 +889,110 @@ app.get("/api/scopus/author-papers/:authorId", async (req, res) => {
     res.json(papers);
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// Paper DOI Enrichment Endpoint (with caching)
+// ==========================================
+app.post("/api/papers/enrich-by-doi", async (req, res) => {
+  const { doi } = req.body;
+  if (!doi) return res.status(400).json({ success: false, error: 'DOI is required' });
+
+  const cleanDoi = String(doi).trim().replace(/^https?:\/\/(dx\.)?doi\.org\//i, '').replace(/^doi:\s*/i, '').toLowerCase();
+
+  try {
+    // Check if already enriched in papers table
+    const { data: existingPaper } = await supabase
+      .from('papers')
+      .select('id, title, abstract, keywords, volume, issue, journal, publication_date, metadata_enriched_at, metadata_source, enrichment_status')
+      .eq('doi', cleanDoi)
+      .maybeSingle();
+
+    if (existingPaper && existingPaper.enrichment_status === 'enriched' && existingPaper.metadata_enriched_at) {
+      const enrichedAt = new Date(existingPaper.metadata_enriched_at);
+      const hoursSinceEnrichment = (Date.now() - enrichedAt.getTime()) / (1000 * 60 * 60);
+      if (hoursSinceEnrichment < 168) { // 1 week cache
+        return res.json({
+          success: true,
+          cached: true,
+          data: {
+            title: existingPaper.title,
+            abstract: existingPaper.abstract,
+            keywords: existingPaper.keywords,
+            volume: existingPaper.volume,
+            issue: existingPaper.issue,
+            journal: existingPaper.journal,
+            publicationDate: existingPaper.publication_date,
+            metadata_source: existingPaper.metadata_source,
+            metadata_enriched_at: existingPaper.metadata_enriched_at
+          }
+        });
+      }
+    }
+
+    // Enrich from Crossref/OpenAlex
+    const { enrichByDoi } = require('./crossrefService');
+    const result = await enrichByDoi(cleanDoi);
+
+    if (!result.success) {
+      return res.json({ success: false, reason: result.reason, cached: false });
+    }
+
+    const enrichedData = result.data;
+
+    // Update or insert paper with enriched data
+    if (existingPaper) {
+      await supabase
+        .from('papers')
+        .update({
+          abstract: enrichedData.abstract || existingPaper.abstract,
+          keywords: enrichedData.keywords || existingPaper.keywords,
+          volume: enrichedData.volume || existingPaper.volume,
+          issue: enrichedData.issue || existingPaper.issue,
+          journal: enrichedData.journal || existingPaper.journal,
+          publication_date: enrichedData.publicationDate || existingPaper.publication_date,
+          metadata_source: result.source,
+          metadata_enriched_at: new Date().toISOString(),
+          enrichment_status: 'enriched'
+        })
+        .eq('id', existingPaper.id);
+    } else {
+      await supabase
+        .from('papers')
+        .insert({
+          doi: cleanDoi,
+          title: enrichedData.title,
+          abstract: enrichedData.abstract,
+          keywords: enrichedData.keywords,
+          volume: enrichedData.volume,
+          issue: enrichedData.issue,
+          journal: enrichedData.journal,
+          publication_date: enrichedData.publicationDate,
+          metadata_source: result.source,
+          metadata_enriched_at: new Date().toISOString(),
+          enrichment_status: 'enriched',
+          source: 'enrichment'
+        });
+    }
+
+    res.json({
+      success: true,
+      cached: false,
+      data: {
+        title: enrichedData.title,
+        abstract: enrichedData.abstract,
+        keywords: enrichedData.keywords,
+        volume: enrichedData.volume,
+        issue: enrichedData.issue,
+        journal: enrichedData.journal,
+        publicationDate: enrichedData.publicationDate,
+        metadata_source: result.source
+      }
+    });
+  } catch (error) {
+    console.error('[DOI Enrichment Error]:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

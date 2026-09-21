@@ -29,6 +29,9 @@ import Header from "./components/Header";
 import Sidebar from "./components/Sidebar";
 import ScholarDashboard from "./components/ScholarDashboard";
 import ScholarImportModal from "./components/ScholarImportModal";
+import { parseImportedAuthors, titleSimilarity } from "./utils/authors";
+import { normalizeImportedPaper, mergeMissingPaperFields, needsDoiEnrichment } from "./utils/paperNormalizer";
+import { AUTHOR_ROLE, AUTHOR_OPTIONS as SHARED_AUTHOR_OPTIONS, isFirstRole, isCorrespondingRole } from "./constants/authorRoles";
 import PdfUploadModal from "./components/PdfUploadModal";
 import PlanningSimulator from "./components/PlanningSimulator";
 import AdminFacultyOverview from "./components/AdminFacultyOverview";
@@ -84,7 +87,7 @@ const TYPE_GROUPS = [
     ],
   },
 ];
-const AUTHOR_OPTIONS = ["First author", "Corresponding author", "Co author"];
+const AUTHOR_OPTIONS = [...SHARED_AUTHOR_OPTIONS];
 const DB_OPTIONS = ["ไม่มีฐานข้อมูล", "TCI กลุ่ม 2", "TCI กลุ่ม 1", "Scopus Q1", "Scopus Q2", "Scopus Q3", "Scopus Q4"];
 
 const emptyForm = { 
@@ -296,7 +299,7 @@ const [staffList, setStaffList] = useState([]);
     }
 
     // 3. กฎ: ถ้ามีผู้แต่งมากกว่า 1 คน First author จะกรอก 100% ไม่ได้ และทุกคนต้องมากกว่า 0%
-    const firstAuthor = authorList.find(a => a.role === "First author" || a.role === "First Author");
+    const firstAuthor = authorList.find(a => isFirstRole(a.role));
     const pFirst = firstAuthor ? Number(firstAuthor.proportion) : null;
 
     if (authorList.length > 1) {
@@ -312,8 +315,8 @@ const [staffList, setStaffList] = useState([]);
     }
 
     // 4. First author >= Corresponding author >= Co author check
-    const corrAuthor = authorList.find(a => a.role === "Corresponding author" || a.role === "Corresponding Author");
-    const coAuthors = authorList.filter(a => a.role === "Co author" || a.role === "Co-author" || a.role === "Co Author");
+    const corrAuthor = authorList.find(a => isCorrespondingRole(a.role));
+    const coAuthors = authorList.filter(a => isCoAuthorRole(a.role));
     const pCorr = corrAuthor ? Number(corrAuthor.proportion) : null;
 
     if (pFirst !== null && pCorr !== null && pCorr > pFirst) {
@@ -348,121 +351,128 @@ const [staffList, setStaffList] = useState([]);
     }
 
     return true;
-  };
+};
 
-// Handler for importing paper data from Scholar Dashboard / Modal to Form
-  const handleImportFromScholar = (paperData, userObj) => {
-    console.log("📥 ข้อมูลดิบที่รับมาจาก Modal:", paperData);
+const handleImportFromScholar = async (paperData, userObj) => {
+  try {
+    // 1. Normalize imported paper data (single source of truth)
+    let paper = normalizeImportedPaper(paperData);
 
-    // 1. เช็กที่มาของข้อมูลให้ชัดเจนยิ่งขึ้น (ป้องกันค่า null / undefined / สตริงว่าง)
-    const isScopusImport = Boolean(
-      paperData.eid &&
-      paperData.eid !== 'null' &&
-      paperData.eid !== 'undefined' &&
-      paperData.eid.trim() !== ''
-    ) || paperData.source === 'scopus';
-
-    console.log("📋 isScopusImport:", isScopusImport, "eid:", paperData.eid);
-
-    // 2. ใช้ Parser หั่นชื่อและจัดฟอร์แมตผู้แต่ง (รับค่า isScopusImport ด้วย)
-    const mappedAuthorList = parseImportedAuthors(paperData.authors_raw || paperData.authors, isScopusImport, staffList);
-
-    // 🌟 NEW: Equal split on import
-    const numAuthors = mappedAuthorList.length;
-    const initialSplit = numAuthors > 0 ? Math.floor(100 / numAuthors) : 0;
-    const remainder = numAuthors > 0 ? 100 - (initialSplit * numAuthors) : 0;
-
-    const authorsWithInitialSplit = mappedAuthorList.map((author, index) => ({
-      ...author,
-      proportion: index === 0 ? initialSplit + remainder : initialSplit
-    }));
-
-    // 3. ดึงชื่อ Corresponding Author จากตัวที่ปักธง isCorresponding ในอาร์เรย์
-    const correspondingAuthorName = authorsWithInitialSplit.find(a => a.isCorresponding)?.name
-      || (authorsWithInitialSplit.length > 0 ? authorsWithInitialSplit[authorsWithInitialSplit.length - 1].name : '');
-
-    // 4. Map ข้อมูลลง State ของ Form ให้ครบทุกฟิลด์
-    setForm(prev => ({
-      ...prev,
-      // 🌟 Title - รองรับ key หลายรูปแบบจาก Google Scholar / Scopus
-      title: paperData.title || paperData.article_title || paperData.name || paperData.title_text || prev.title,
-      // 🌟 Journal - รองรับ key หลายรูปแบบ (publisher, venue, publication)
-      journal: paperData.journal || paperData.publisher || paperData.venue || paperData.publication || prev.journal,
-      // 🌟 DOI - รองรับ key หลายรูปแบบ
-      doi: paperData.doi || paperData.article_doi || prev.doi,
-      // จัดการ Volume / Issue
-      volume: paperData.volume || prev.volume,
-      issue: paperData.issue || prev.issue,
-      // จัดการปีพิมพ์ (ถ้ามี) - รองรับ key หลายรูปแบบ
-      publicationDate: paperData.date || paperData.publicationDate || paperData.publication_date || paperData.publishDate || paperData.year || paperData.pub_year || (paperData.publish_year ? `${paperData.publish_year}-01-01` : '') || prev.publicationDate,
-      // บทคัดย่อและคำสำคัญ
-      abstract: paperData.abstract || paperData.description || prev.abstract,
-      keywords: Array.isArray(paperData.keywords)
-        ? paperData.keywords.join(', ')
-        : (paperData.keywords || prev.keywords),
-      // โยนรายชื่อผู้แต่งที่ผ่านการหั่นแล้วลงตาราง (พร้อม role และ isCorresponding)
-      authorList: authorsWithInitialSplit,
-      // ตั้งค่า Corresponding Author จากตัวที่ปักธงไว้ในอาร์เรย์โดยตรง
-      correspondingAuthor: correspondingAuthorName
-    }));
-
-    // เลื่อนหน้าจากกลับขึ้นไปด้านบนเพื่อให้ผู้ใช้เห็นว่าข้อมูลเปลี่ยนแล้ว
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // 🌟 ฟังก์ชันแปลงรายชื่อผู้แต่งจาก Scopus/Scholar ให้เข้ากับโครงสร้าง authorList
-  const parseImportedAuthors = (rawAuthors, isScopusImport, staffList) => {
-    // 1. ถ้าไม่มีข้อมูลเลย ให้คืนค่าผู้แต่งว่างๆ 1 คน
-    if (!rawAuthors) {
-      return [{ id: Date.now(), name: "", proportion: "", affiliation: "", role: "First Author", isCorresponding: false }];
-    }
-
-    let namesArray = [];
-
-    // 2. เช็คว่าข้อมูลที่ได้มาเป็น Array หรือ String
-    if (Array.isArray(rawAuthors)) {
-      namesArray = rawAuthors;
-    } else if (typeof rawAuthors === 'string') {
-      // Scopus มักจะคั่นชื่อด้วยเครื่องหมาย ';' หรือ ','
-      const delimiter = rawAuthors.includes(';') ? ';' : ',';
-      namesArray = rawAuthors.split(delimiter);
-    }
-
-    // 3. ลบช่องว่างหน้าหลังและเอาชื่อที่ว่างออก
-    namesArray = namesArray.map(name => name.trim()).filter(name => name.length > 0);
-
-    // 4. ถ้าหั่นแล้วว่างเปล่า คืนค่า default
-    if (namesArray.length === 0) {
-      return [{ id: Date.now(), name: "", proportion: "", affiliation: "", role: "First Author", isCorresponding: false }];
-    }
-
-    // 5. 🌟 Normalize ชื่อจาก "Last, First" → "First Last" (เช่น "Riyana, S." → "S. Riyana")
-    const normalizeName = (name) => {
-      const parts = name.split(',').map(p => p.trim());
-      if (parts.length === 2) {
-        return `${parts[1]} ${parts[0]}`;
+    // 2. DOI Enrichment (backend) - only for missing fields
+    if (paper.doi && needsDoiEnrichment(paper)) {
+      try {
+        console.log('[Import] Enriching via DOI:', paper.doi);
+        const response = await fetch(`${API_URL}/papers/enrich-by-doi`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doi: paper.doi })
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.data) {
+            paper = mergeMissingPaperFields(paper, result.data);
+            console.log('[Import] DOI enrichment successful, source:', result.data.metadata_source);
+          }
+        }
+      } catch (enrichErr) {
+        console.warn('[Import] DOI enrichment failed:', enrichErr.message);
+        // Continue with original data - don't block form
       }
-      return name; // รูปแบบอื่นคืนค่าเดิม
-    };
+    }
 
-    // 6. ประกอบเป็น Array Object ตามโครงสร้าง authorList พร้อม role, isCorresponding, และ affiliation
-    return namesArray.map((name, index) => {
-      const isLastAuthor = index === namesArray.length - 1;
-      const isCorresponding = isScopusImport ? index === 0 : isLastAuthor;
-      const normalizedName = normalizeName(name);
-      const affiliation = enrichAuthorWithAffiliation(staffList, normalizedName);
+    // 3. Parse authors with shared constants - respect explicit corresponding, fallback to last author
+    const parsedAuthors = parseImportedAuthors(paper.authors, {
+      isScopusImport: paper.source === 'scopus',
+      correspondingName: paperData.corresponding_author
+    });
+
+    // 4. Determine author roles with proper precedence:
+    // - If source explicitly specifies corresponding author(s), use that
+    // - Single author: First & Corresponding author
+    // - Multiple authors, no explicit corresponding: last author = Corresponding
+    const hasExplicitCorresponding = parsedAuthors.some(
+      (author) =>
+        author.isCorresponding === true ||
+        author.role === AUTHOR_ROLE.CORRESPONDING ||
+        author.role === AUTHOR_ROLE.FIRST_AND_CORRESPONDING
+    );
+
+    const authorCount = parsedAuthors.length;
+    const equalProportion = authorCount > 0 ? Math.floor((100 / authorCount) * 100) / 100 : 0;
+
+    const authorList = parsedAuthors.map((author, index) => {
+      const isFirst = index === 0;
+      const isLast = index === authorCount - 1;
+
+      let authorType;
+      let isCorresponding = false;
+
+      if (authorCount === 1) {
+        authorType = AUTHOR_ROLE.FIRST_AND_CORRESPONDING;
+        isCorresponding = true;
+      } else if (hasExplicitCorresponding) {
+        // Keep original role from source
+        authorType = author.role || (isFirst ? AUTHOR_ROLE.FIRST : AUTHOR_ROLE.CO_AUTHOR);
+        isCorresponding = author.isCorresponding === true || author.role === AUTHOR_ROLE.CORRESPONDING;
+      } else {
+        // Fallback: last author = Corresponding
+        if (isFirst) {
+          authorType = AUTHOR_ROLE.FIRST;
+        } else if (isLast) {
+          authorType = AUTHOR_ROLE.CORRESPONDING;
+          isCorresponding = true;
+        } else {
+          authorType = AUTHOR_ROLE.CO_AUTHOR;
+        }
+      }
+
+      const proportion = isLast && authorCount > 1
+        ? Number((100 - equalProportion * (authorCount - 1)).toFixed(2))
+        : equalProportion;
+
       return {
-        id: Date.now() + index,
-        name: normalizedName,
-        proportion: "", // 🌟 ปล่อยว่างไว้ให้ผู้ใช้กดปุ่ม Preset
-        affiliation: affiliation,
-        role: index === 0 ? 'First author' : (isCorresponding ? 'Corresponding author' : 'Co author'),
-        isCorresponding: isCorresponding
+        ...author,
+        authorType,
+        role: authorType,
+        isCorresponding,
+        proportion
       };
     });
-  };
 
-  // Handler for PDF extraction completion
+    const lastAuthor = authorList.at(-1);
+
+    // 5. Update form with all normalized + enriched data
+    setForm(prev => ({
+      ...prev,
+      title: paper.title,
+      journal: paper.journal,
+      doi: paper.doi,
+      publicationDate: paper.publicationDate,
+      volume: paper.volume,
+      issue: paper.issue,
+      abstract: paper.abstract,
+      keywords: Array.isArray(paper.keywords) ? paper.keywords.join(', ') : (paper.keywords || ''),
+      source: paper.source || '',
+      authorList,
+      correspondingAuthor: lastAuthor?.name || ''
+    }));
+
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (error) {
+    console.error('[Import] Failed to import paper:', error);
+    // Fallback: still open form with whatever data we have
+    setForm(prev => ({
+      ...prev,
+      title: paperData.title || '',
+      journal: paperData.journal || '',
+      doi: paperData.doi || '',
+      authorList: parseImportedAuthors(paperData.authors_raw || paperData.authors || '')
+    }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+};
+
+  // Handler for PDF extraction completion  // Handler for PDF extraction completion
   const handlePdfExtractComplete = (response) => {
     // 1. เช็กโครงสร้างที่แท้จริง
     console.log("[PDF Extract] Raw Response:", response);
