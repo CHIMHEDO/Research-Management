@@ -51,7 +51,7 @@ const LOOKUP_TABLE = [
   { type: "วารสารระดับนานาชาติ", db: "Scopus Q2", code: "2.1.8", hours: 150, quality: 1, faculty: 10000, facultyNote: "ไม่เกิน 10,000 บาท (จ่ายตามจริง)", uni: 30000 },
   { type: "วารสารระดับนานาชาติ", db: "Scopus Q3", code: "2.1.8", hours: 150, quality: 1, faculty: 10000, facultyNote: "ไม่เกิน 10,000 บาท (จ่ายตามจริง)", uni: 20000 },
   { type: "วารสารระดับนานาชาติ", db: "Scopus Q4", code: "2.1.8", hours: 150, quality: 1, faculty: 10000, facultyNote: "ไม่เกิน 10,000 บาท (จ่ายตามจริง)", uni: 10000 },
-  { type: "จดทะเบียนทรัพย์สินทางปัญหาอื่นๆ", db: NO_DB, code: "2.1.9", hours: 150, quality: 0, faculty: 0, uni: 1000 },
+  { type: "จดทะเบียนทรัพย์สินทางปัญญาอื่นๆ", db: NO_DB, code: "2.1.9", hours: 150, quality: 0, faculty: 0, uni: 1000 },
   { type: "จดทะเบียนอนุสิทธิบัตร", db: NO_DB, code: "2.1.10", hours: 150, quality: 0.4, faculty: 0, uni: 3000 },
   { type: "จดทะเบียนสิทธิบัตร", db: NO_DB, code: "2.1.11", hours: 300, quality: 1, faculty: 0, uni: 5000 },
   { type: "งานสร้างสรรค์ที่มีการเผยแพร่สู่สาธารณะ (สื่ออิเล็กทรอนิกส์ online)", db: NO_DB, code: "2.2.1", hours: 20, quality: 0.2, faculty: 0, uni: 0 },
