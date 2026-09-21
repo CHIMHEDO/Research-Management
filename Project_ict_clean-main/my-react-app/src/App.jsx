@@ -771,7 +771,10 @@ function computeClientCalculation(formState) {
       const data = await res.json();
       if (data && data.success) {
         setEntries(data.data);
-        setToast("บันทึกผลงานเรียบร้อยแล้ว");
+        const hasMultipleAuthors = (form.authorList || []).length > 1;
+        setToast(hasMultipleAuthors 
+          ? "บันทึกผลงานแล้ว และส่งอีเมลแจ้งเตือนผู้ร่วมงานเพื่อยืนยันสัดส่วน (รอการยืนยัน 7 วัน)" 
+          : "บันทึกผลงานเรียบร้อยแล้ว");
         setForm({ ...emptyForm, authorName: user?.full_name || "" });
         setTab("dashboard");
         return;
@@ -781,17 +784,67 @@ function computeClientCalculation(formState) {
     }
 
     // Fallback update local state if backend API is not responding
+    const isSingle = (form.authorList || []).length <= 1;
+    const fallbackEntry = {
+      ...payload,
+      confirmation_status: isSingle ? "CONFIRMED" : "PENDING",
+      confirmation_days_remaining: 7,
+      is_workload_counted: isSingle,
+      confirmed_by: [user?.name_th || user?.name_en || user?.full_name || user?.email || "submitter"],
+      author_list: form.authorList || []
+    };
     setEntries(prev => {
       const filtered = prev.filter(item => item.id !== entryId);
-      return [payload, ...filtered];
+      return [fallbackEntry, ...filtered];
     });
-    setToast("บันทึกผลงานเรียบร้อยแล้ว");
+    setToast(isSingle ? "บันทึกผลงานเรียบร้อยแล้ว" : "บันทึกผลงานแล้ว (รอผู้ร่วมงานยืนยันสัดส่วน 7 วัน)");
     setForm({ ...emptyForm, authorName: user?.full_name || "" });
     setTab("dashboard");
   };
 
   // ฟังก์ชันปรับแต่ง/แก้ไขข้อมูลผลงาน
   const handleEdit = (entry) => {
+    let resolvedAuthorList = [];
+    if (Array.isArray(entry.author_list) && entry.author_list.length > 0) {
+      resolvedAuthorList = entry.author_list.map((a, idx) => ({
+        id: a.id || Date.now() + idx,
+        name: a.name || "",
+        role: a.role || (idx === 0 ? "First author" : "Co author"),
+        proportion: a.proportion !== undefined ? a.proportion : (idx === 0 ? (entry.proportion || 100) : 0),
+        affiliation: a.affiliation || entry.affiliations || "",
+        isCorresponding: a.role === "Corresponding author" || a.isCorresponding || false
+      }));
+    } else if (Array.isArray(entry.authorList) && entry.authorList.length > 0) {
+      resolvedAuthorList = entry.authorList;
+    } else if (entry.authors) {
+      const names = entry.authors.split(/[,;]/).map(n => n.trim()).filter(Boolean);
+      resolvedAuthorList = names.map((name, idx) => {
+        const isCorr = entry.correspondingAuthor && entry.correspondingAuthor.toLowerCase().includes(name.toLowerCase());
+        const isFirst = idx === 0;
+        return {
+          id: Date.now() + idx,
+          name,
+          role: isFirst ? (entry.author || "First author") : (isCorr ? "Corresponding author" : "Co author"),
+          proportion: isFirst ? (entry.proportion || 100) : 0,
+          affiliation: entry.affiliations || "",
+          isCorresponding: !!isCorr
+        };
+      });
+    }
+
+    if (resolvedAuthorList.length === 0) {
+      resolvedAuthorList = [
+        {
+          id: Date.now(),
+          role: entry.author || AUTHOR_OPTIONS[0],
+          name: entry.authorName || user?.full_name || "",
+          proportion: entry.proportion !== undefined ? entry.proportion : 100,
+          affiliation: entry.affiliations || "",
+          isCorresponding: entry.author === "Corresponding author"
+        }
+      ];
+    }
+
     setForm({
       id: entry.id,
       title: entry.title || "",
@@ -811,6 +864,7 @@ function computeClientCalculation(formState) {
       db: entry.db || DB_OPTIONS[0],
       proportion: entry.proportion !== undefined ? entry.proportion : 100,
       date: entry.publicationDate || entry.date || "",
+      authorList: resolvedAuthorList
     });
     setTab("form");
     if (setToast) {

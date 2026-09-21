@@ -281,8 +281,24 @@ app.post("/api/entries", async (req, res) => {
     const initialDeadline = parsedDateInfo.confirmation?.deadline || new Date(Date.now() + 7 * 86400000).toISOString();
     const isOnlyOneAuthor = (processedAuthorList?.length || 1) <= 1;
 
+    // ตรวจสอบว่าผู้แต่งทุกคนกดยืนยันครบแล้วจริงหรือไม่
+    let isAllConfirmed = false;
+    if (isOnlyOneAuthor) {
+      isAllConfirmed = true;
+    } else {
+      const confirmedSet = new Set(existingConfirmedBy.map(c => String(c).toLowerCase().trim()));
+      isAllConfirmed = (processedAuthorList || []).every(author => {
+        const aName = (author.name || "").toLowerCase().trim();
+        if (!aName) return true;
+        for (const c of confirmedSet) {
+          if (c && (c.includes(aName) || aName.includes(c))) return true;
+        }
+        return false;
+      });
+    }
+
     parsedDateInfo.confirmation = {
-      status: parsedDateInfo.confirmation?.status || (isOnlyOneAuthor ? "CONFIRMED" : "PENDING"),
+      status: isAllConfirmed ? "CONFIRMED" : "PENDING",
       deadline: initialDeadline,
       confirmed_by: existingConfirmedBy,
       author_list: processedAuthorList || []
