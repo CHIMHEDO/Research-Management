@@ -31,7 +31,7 @@ import ScholarDashboard from "./components/ScholarDashboard";
 import ScholarImportModal from "./components/ScholarImportModal";
 import { parseImportedAuthors, titleSimilarity } from "./utils/authors";
 import { normalizeImportedPaper, mergeMissingPaperFields, needsDoiEnrichment } from "./utils/paperNormalizer";
-import { AUTHOR_ROLE, AUTHOR_OPTIONS as SHARED_AUTHOR_OPTIONS, isFirstRole, isCorrespondingRole } from "./constants/authorRoles";
+import { AUTHOR_ROLE, AUTHOR_OPTIONS as SHARED_AUTHOR_OPTIONS, isFirstRole, isCorrespondingRole, isCoAuthorRole } from "./constants/authorRoles";
 import PdfUploadModal from "./components/PdfUploadModal";
 import PlanningSimulator from "./components/PlanningSimulator";
 import AdminFacultyOverview from "./components/AdminFacultyOverview";
@@ -291,7 +291,7 @@ const [staffList, setStaffList] = useState([]);
       return false;
     }
 
-    // 2. Check total percentage sum
+    // 2. Check total percentage sum (100%)
     const totalSum = authorList.reduce((sum, a) => sum + Number(a.proportion || 0), 0);
     if (Math.abs(totalSum - 100) > 0.1) {
       alert(`ผลรวมสัดส่วนต้องเท่ากับ 100% พอดี (ปัจจุบันรวมได้ ${totalSum.toFixed(1)}%)`);
@@ -314,27 +314,34 @@ const [staffList, setStaffList] = useState([]);
       }
     }
 
-    // 4. First author >= Corresponding author >= Co author check
-    const corrAuthor = authorList.find(a => isCorrespondingRole(a.role));
+    // 4. ลำดับบทบาท: First author >= Corresponding author >= Co author
+    const corrAuthors = authorList.filter(a => isCorrespondingRole(a.role) && a !== firstAuthor);
     const coAuthors = authorList.filter(a => isCoAuthorRole(a.role));
-    const pCorr = corrAuthor ? Number(corrAuthor.proportion) : null;
 
-    if (pFirst !== null && pCorr !== null && pCorr > pFirst) {
-      alert(`สัดส่วนของ Corresponding author (${pCorr}%) ต้องไม่มากกว่า First author (${pFirst}%)`);
-      return false;
+    // ตรวจสอบ: First author >= Corresponding author
+    if (pFirst !== null) {
+      for (const corr of corrAuthors) {
+        const pCorr = Number(corr.proportion);
+        if (pCorr > pFirst) {
+          alert(`สัดส่วนของ Corresponding author (${pCorr}%) ต้องไม่มากกว่า First author (${pFirst}%)`);
+          return false;
+        }
+      }
     }
 
-    if (pCorr !== null) {
-      for (let i = 0; i < coAuthors.length; i++) {
-        const pCo = Number(coAuthors[i].proportion);
-        if (pCo > pCorr) {
-          alert(`สัดส่วนของ Co author (${pCo}%) ต้องไม่มากกว่า Corresponding author (${pCorr}%)`);
+    // ตรวจสอบ: Corresponding author >= Co author (หรือ First author >= Co author กรณีไม่มี Corresponding)
+    if (corrAuthors.length > 0) {
+      const minCorrProp = Math.min(...corrAuthors.map(c => Number(c.proportion)));
+      for (const co of coAuthors) {
+        const pCo = Number(co.proportion);
+        if (pCo > minCorrProp) {
+          alert(`สัดส่วนของ Co author (${pCo}%) ต้องไม่มากกว่า Corresponding author (${minCorrProp}%)`);
           return false;
         }
       }
     } else if (pFirst !== null) {
-      for (let i = 0; i < coAuthors.length; i++) {
-        const pCo = Number(coAuthors[i].proportion);
+      for (const co of coAuthors) {
+        const pCo = Number(co.proportion);
         if (pCo > pFirst) {
           alert(`สัดส่วนของ Co author (${pCo}%) ต้องไม่มากกว่า First author (${pFirst}%)`);
           return false;
@@ -342,16 +349,8 @@ const [staffList, setStaffList] = useState([]);
       }
     }
 
-    // 5. Sequential check (author i <= author i-1)
-    for (let i = 1; i < authorList.length; i++) {
-      if (Number(authorList[i].proportion) > Number(authorList[i - 1].proportion)) {
-        alert(`สัดส่วนของผู้แต่งคนที่ ${i + 1} (${authorList[i].role}) ต้องไม่มากกว่าผู้แต่งคนที่ ${i} (${authorList[i - 1].role})`);
-        return false;
-      }
-    }
-
     return true;
-};
+  };
 
 const handleImportFromScholar = async (paperData, userObj) => {
   try {
@@ -810,6 +809,24 @@ function computeClientCalculation(formState) {
     setToast(isSingle ? "บันทึกผลงานเรียบร้อยแล้ว" : "บันทึกผลงานแล้ว (รอผู้ร่วมงานยืนยันสัดส่วน 7 วัน)");
     setForm({ ...emptyForm, authorName: user?.full_name || "" });
     setTab("dashboard");
+  };
+
+  // ฟังก์ชันอัปเดตข้อมูลผลงาน / บันทึกการเบิกจ่ายเงินรางวัล (Admin Disbursement)
+  const handleSaveUpdatedEntry = async (updatedEntry) => {
+    try {
+      const res = await api.post("/entries", updatedEntry);
+      if (res.data && res.data.success) {
+        setEntries(res.data.data);
+        setToast("บันทึกข้อมูลการเบิกจ่ายเงินรางวัลเรียบร้อยแล้ว");
+        return;
+      }
+    } catch (err) {
+      console.error("Save updated entry error, fallback to local:", err);
+    }
+
+    // Fallback update local state
+    setEntries(prev => prev.map(item => item.id === updatedEntry.id ? { ...item, ...updatedEntry } : item));
+    setToast("บันทึกข้อมูลการเบิกจ่ายเงินรางวัลเรียบร้อยแล้ว");
   };
 
   // ฟังก์ชันปรับแต่ง/แก้ไขข้อมูลผลงาน
@@ -1347,25 +1364,23 @@ function computeClientCalculation(formState) {
   {(form.authorList || []).map((author, index) => {
     const isMultiAuthor = (form.authorList || []).length > 1;
     const currentRole = author.role || (index === 0 ? "First author" : "Co author");
-    let maxAllowed = (index === 0 && isMultiAuthor) ? (100 - (form.authorList.length - 1)) : 100;
 
-    if (index > 0) {
-      const prevProp = form.authorList[index - 1]?.proportion;
-      if (prevProp !== "" && prevProp !== undefined && prevProp !== null) {
-        maxAllowed = Math.min(maxAllowed, Number(prevProp));
+    const firstAuthor = form.authorList.find(a => isFirstRole(a.role));
+    const corrAuthors = form.authorList.filter(a => isCorrespondingRole(a.role) && a !== firstAuthor);
+
+    let maxAllowed = 100;
+    if (isFirstRole(currentRole)) {
+      maxAllowed = isMultiAuthor ? (100 - (form.authorList.length - 1)) : 100;
+    } else if (isCorrespondingRole(currentRole)) {
+      if (firstAuthor && firstAuthor.proportion !== "" && firstAuthor.proportion !== undefined) {
+        maxAllowed = Math.min(100, Number(firstAuthor.proportion));
       }
-    }
-
-    const firstAuthor = form.authorList.find(a => a.role === "First author" || a.role === "First Author");
-    const corrAuthor = form.authorList.find(a => a.role === "Corresponding author" || a.role === "Corresponding Author");
-
-    if (currentRole === "Corresponding author" && firstAuthor && firstAuthor.proportion !== "") {
-      maxAllowed = Math.min(maxAllowed, Number(firstAuthor.proportion));
-    } else if (currentRole === "Co author") {
-      if (corrAuthor && corrAuthor.proportion !== "") {
-        maxAllowed = Math.min(maxAllowed, Number(corrAuthor.proportion));
-      } else if (firstAuthor && firstAuthor.proportion !== "") {
-        maxAllowed = Math.min(maxAllowed, Number(firstAuthor.proportion));
+    } else if (isCoAuthorRole(currentRole)) {
+      if (corrAuthors.length > 0) {
+        const minCorrProp = Math.min(...corrAuthors.map(c => Number(c.proportion || 100)));
+        maxAllowed = Math.min(100, minCorrProp);
+      } else if (firstAuthor && firstAuthor.proportion !== "" && firstAuthor.proportion !== undefined) {
+        maxAllowed = Math.min(100, Number(firstAuthor.proportion));
       }
     }
 

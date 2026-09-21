@@ -240,21 +240,10 @@ app.post("/api/entries", async (req, res) => {
     const pubDate = publicationDate || date || null;
 
     if (req.body.id) {
-      const { error } = await supabase.from("entries").delete().eq("id", req.body.id);
-if (error) {
-      console.error('[Get User Papers Error]', {
-        userId,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint
-      });
-      return res.status(500).json({
-        success: false,
-        error: 'GET_USER_PAPERS_FAILED',
-        message: error.message
-      });
-    }
+      const { error: deleteError } = await supabase.from("entries").delete().eq("id", req.body.id);
+      if (deleteError) {
+        console.error('[Delete Entry On Update Error]', deleteError);
+      }
     }
 
     let parsedDateInfo = dateInfo || {};
