@@ -131,13 +131,13 @@ exports.handleMicrosoftCallback = async (req, res) => {
 // 3. ดึงข้อมูลโปรไฟล์ผู้ใช้ปัจจุบัน
 exports.getCurrentUserProfile = async (req, res) => {
   try {
-    const { data: user, error } = await supabase.from('users').select('*, programs(*)').eq('id', req.user.id).single();
+    const { data: user, error } = await supabase.from('users').select('*').eq('id', req.user.id).single();
 
     if (error || !user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    res.json({ success: true, user: flattenUser(user) });
+    res.json({ success: true, user: enrichUserWithFaculty(user) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -146,9 +146,9 @@ exports.getCurrentUserProfile = async (req, res) => {
 // 4. ดูรายชื่อผู้ใช้ทั้งหมด (สำหรับ Admin)
 exports.getAllUsers = async (req, res) => {
   try {
-    const { data: rows, error } = await supabase.from('users').select('*, programs(*)').order('id', { ascending: false });
+    const { data: rows, error } = await supabase.from('users').select('*').order('id', { ascending: false });
     if (error) throw error;
-    res.json({ success: true, data: flattenUsers(rows) });
+    res.json({ success: true, data: (rows || []).map(enrichUserWithFaculty) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -200,7 +200,7 @@ exports.loginWithEmail = async (req, res) => {
     }
 
     // ค้นหาผู้ใช้จากฐานข้อมูล
-    let { data: user, error } = await supabase.from('users').select('*, programs(*)').ilike('email', email.toLowerCase().trim()).maybeSingle();
+    let { data: user, error } = await supabase.from('users').select('*').ilike('email', email.toLowerCase().trim()).maybeSingle();
 
     // ถ้ายังไม่มีใน users ให้ค้นหาใน UP_ICT_FACULTY แล้วสร้างอัตโนมัติ
     if (!user) {
@@ -216,7 +216,7 @@ exports.loginWithEmail = async (req, res) => {
           scholar_id: matchedFaculty.scholar_id,
           scopus_id: matchedFaculty.scopus_id,
           role: 'user'
-        }).select('*, programs(*)');
+        }).select('*');
         if (insertedUser && insertedUser.length > 0) {
           user = insertedUser[0];
         }
