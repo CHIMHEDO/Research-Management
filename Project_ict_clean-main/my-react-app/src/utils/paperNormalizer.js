@@ -49,9 +49,25 @@ export const normalizePaperKeywords = (value) => {
   return [];
 };
 
+/**
+ * Parse authors from various formats:
+ * - Array of strings: ['Author One', 'Author Two']
+ * - Array of objects with .name: [{ name: 'Author One' }, ...]
+ * - Crossref/OpenAlex format: [{ given: 'First', family: 'Last', affiliation, isCorresponding, orcid }, ...]
+ * - Comma-separated string: 'Author One, Author Two'
+ */
 const parseAuthors = (authors) => {
   if (isBlank(authors)) return [];
-  if (Array.isArray(authors)) return authors.map(a => (typeof a === 'string' ? a : a?.name || '')).filter(Boolean);
+  if (Array.isArray(authors)) {
+    // Crossref/OpenAlex format: array of objects with given/family
+    if (authors.length > 0 && typeof authors[0] === 'object' && authors[0].given) {
+      return authors
+        .map(a => [a.given, a.family].filter(Boolean).join(' '))
+        .filter(Boolean);
+    }
+    // Scopus format: array of strings OR objects with .name
+    return authors.map(a => (typeof a === 'string' ? a : a?.name || '')).filter(Boolean);
+  }
   if (typeof authors === 'string') return authors.split(/[,;]| and /i).map(s => s.trim()).filter(Boolean);
   return [];
 };
@@ -124,18 +140,37 @@ export const normalizeImportedPaper = (paperData = {}) => {
   };
 };
 
-export const mergeMissingPaperFields = (source, enriched) => ({
-  ...source,
-  abstract: isBlank(source.abstract) ? (enriched.abstract || '') : source.abstract,
-  keywords: isBlank(source.keywords) ? (enriched.keywords || []) : source.keywords,
-  volume: isBlank(source.volume) ? (enriched.volume || '') : source.volume,
-  issue: isBlank(source.issue) ? (enriched.issue || '') : source.issue,
-  journal: isBlank(source.journal) ? (enriched.journal || '') : source.journal,
-  publicationDate: isBlank(source.publicationDate) ? (enriched.publicationDate || '') : source.publicationDate,
-  metadata_enriched_at: enriched.metadata_enriched_at || source.metadata_enriched_at || new Date().toISOString(),
-  metadata_source: enriched.metadata_source || source.metadata_source || 'enrichment',
-  enrichment_status: 'enriched'
-});
+/**
+ * Smart merge: only fill missing fields from enriched data
+ * - Authors: use enriched if it has MORE authors than source (Crossref fallback when Scopus incomplete)
+ * - Date: prefer enriched if source date is issue cover date (day=01)
+ */
+export const mergeMissingPaperFields = (source, enriched) => {
+  const srcAuthors = Array.isArray(source.authors) ? source.authors : [];
+  const enrAuthors = Array.isArray(enriched.authors) ? enriched.authors : [];
+  
+  // Date: prefer enriched if source date is issue cover date (day=01)
+  const srcDate = source.publicationDate || '';
+  const enrDate = enriched.publicationDate || '';
+  let finalDate = srcDate;
+  if (enrDate && (!srcDate || (srcDate.split('-')[2] === '01'))) {
+    finalDate = enrDate;
+  }
+
+  return {
+    ...source,
+    authors: enrAuthors.length > srcAuthors.length ? enrAuthors : srcAuthors,
+    publicationDate: finalDate,
+    abstract: isBlank(source.abstract) ? (enriched.abstract || '') : source.abstract,
+    keywords: isBlank(source.keywords) ? (enriched.keywords || []) : source.keywords,
+    volume: isBlank(source.volume) ? (enriched.volume || '') : source.volume,
+    issue: isBlank(source.issue) ? (enriched.issue || '') : source.issue,
+    journal: isBlank(source.journal) ? (enriched.journal || '') : source.journal,
+    metadata_enriched_at: enriched.metadata_enriched_at || source.metadata_enriched_at || new Date().toISOString(),
+    metadata_source: enriched.metadata_source || source.metadata_source || 'enrichment',
+    enrichment_status: 'enriched'
+  };
+};
 
 export const needsDoiEnrichment = (paper) =>
   [

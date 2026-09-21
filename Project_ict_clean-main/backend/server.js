@@ -913,6 +913,7 @@ app.post("/api/papers/enrich-by-doi", async (req, res) => {
             issue: existingPaper.issue,
             journal: existingPaper.journal,
             publicationDate: existingPaper.publication_date,
+            authors: existingPaper.authors || [],
             metadata_source: existingPaper.metadata_source,
             metadata_enriched_at: existingPaper.metadata_enriched_at
           }
@@ -976,6 +977,7 @@ app.post("/api/papers/enrich-by-doi", async (req, res) => {
         issue: enrichedData.issue,
         journal: enrichedData.journal,
         publicationDate: enrichedData.publicationDate,
+        authors: enrichedData.authors || [],
         metadata_source: result.source
       }
     });

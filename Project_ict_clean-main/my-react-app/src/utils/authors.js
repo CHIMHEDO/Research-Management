@@ -15,48 +15,96 @@ function norm(s) {
   return String(s).toLowerCase().replace(/[.\s]/g, '');
 }
 
+/**
+ * Extract author name from various object formats:
+ * - Crossref/OpenAlex: { given, family, affiliation, isCorresponding, orcid, seq }
+ * - Scopus: { name, affiliation, seq, isCorresponding }
+ * - Simple: { name, affiliation }
+ * - String: 'Author Name'
+ */
+const extractAuthorInfo = (author) => {
+  if (typeof author === 'string') {
+    return { name: author, affiliation: '', seq: 0, isCorresponding: false };
+  }
+  if (!author || typeof author !== 'object') {
+    return { name: '', affiliation: '', seq: 0, isCorresponding: false };
+  }
+  
+  // Crossref/OpenAlex format: { given, family, affiliation, isCorresponding, orcid, seq }
+  if (author.given || author.family) {
+    const name = [author.given, author.family].filter(Boolean).join(' ').trim();
+    return {
+      name,
+      affiliation: author.affiliation || '',
+      seq: Number(author.seq || 0),
+      isCorresponding: author.isCorresponding === true
+    };
+  }
+  
+  // Scopus/other format: { name, authname, affiliation, isCorresponding, seq }
+  if (author.name || author.authname) {
+    return {
+      name: author.name || author.authname,
+      affiliation: author.affiliation || '',
+      seq: Number(author.seq || author['@seq'] || 0),
+      isCorresponding: author.isCorresponding === true
+    };
+  }
+  
+  return { name: '', affiliation: '', seq: 0, isCorresponding: false };
+};
+
 export function parseImportedAuthors(raw, { isScopusImport = false, correspondingName = null } = {}) {
-  let names;
+  let authors = [];
+  
   if (Array.isArray(raw)) {
-    names = raw.map(a => (typeof a === 'string' ? a : a?.name || '')).filter(Boolean);
+    // Handle array of objects (Crossref/OpenAlex/Scopus) or strings
+    authors = raw.map(extractAuthorInfo).filter(a => a.name);
   } else if (typeof raw === 'string') {
-    names = raw.split(isScopusImport ? /\s*;\s*/ : /\s*;\s*|\s+and\s+|\s*,\s*(?![A-Z]\.?\s*$)/i);
-    names = names.map(s => s.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    // String format: split by separators
+    const names = raw.split(isScopusImport ? /\s*;\s*/ : /\s*;\s*|\s+and\s+|\s*,\s*(?![A-Z]\.?\s*$)/i);
+    authors = names
+      .map(s => s.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .map((name, index) => ({ name, affiliation: '', seq: index + 1, isCorresponding: false }));
   } else {
     return [];
   }
 
-  names = names.filter(n => n && !/^et\s*\.?\s*al\.?$/i.test(n));
+  // Filter out "et al."
+  authors = authors.filter(a => a.name && !/^et\s*\.?\s*al\.?$/i.test(a.name));
+  
+  // Deduplicate by normalized name key
   const nameMap = new Map();
-  for (const n of names) {
-    nameMap.set(key(n), n);
-  }
-  names = [...nameMap.values()];
-  if (!names.length) return [];
-
-  const affOf = (n) => {
-    if (Array.isArray(raw)) {
-      return raw.find(a => (a?.name || a) === n)?.affiliation || '';
+  for (const a of authors) {
+    const k = key(a.name);
+    if (!nameMap.has(k)) {
+      nameMap.set(k, a);
     }
-    return '';
-  };
+  }
+  authors = [...nameMap.values()];
+  
+  if (!authors.length) return [];
+
+  // Sort by seq if available (Crossref/OpenAlex/Scopus)
+  authors.sort((a, b) => (a.seq || 0) - (b.seq || 0));
 
   // Check if source explicitly specifies corresponding author
   const hasExplicitCorresponding = correspondingName != null;
 
   // Find index of explicitly specified corresponding author
   const idxExplicitCorr = hasExplicitCorresponding 
-    ? names.findIndex(n => key(n) === key(correspondingName))
+    ? authors.findIndex(a => key(a.name) === key(correspondingName))
     : -1;
 
-  const baseAuthors = names.map((n, i) => {
+  const baseAuthors = authors.map((a, i) => {
     const isFirst = i === 0;
-    const isLast = i === names.length - 1;
+    const isLast = i === authors.length - 1;
 
     let role;
-    let isCorresponding = false;
+    let isCorresponding = a.isCorresponding || false;
 
-    if (names.length === 1) {
+    if (authors.length === 1) {
       // Single author: First & Corresponding
       role = AUTHOR_ROLE.FIRST_AND_CORRESPONDING;
       isCorresponding = true;
@@ -71,18 +119,27 @@ export function parseImportedAuthors(raw, { isScopusImport = false, correspondin
       else role = AUTHOR_ROLE.CO_AUTHOR;
       isCorresponding = isLast; // Fallback: last is corresponding
     } else {
-      // No explicit corresponding from source: last author = Corresponding
-      if (isFirst) role = AUTHOR_ROLE.FIRST;
-      else if (isLast) { role = AUTHOR_ROLE.CORRESPONDING; isCorresponding = true; }
-      else role = AUTHOR_ROLE.CO_AUTHOR;
+      // No explicit corresponding from source: check if any author has isCorresponding flag
+      const anyHasCorresponding = authors.some(au => au.isCorresponding);
+      if (anyHasCorresponding) {
+        if (a.isCorresponding) role = AUTHOR_ROLE.CORRESPONDING;
+        else if (isFirst) role = AUTHOR_ROLE.FIRST;
+        else role = AUTHOR_ROLE.CO_AUTHOR;
+      } else {
+        // No explicit corresponding from source: last author = Corresponding
+        if (isFirst) role = AUTHOR_ROLE.FIRST;
+        else if (isLast) { role = AUTHOR_ROLE.CORRESPONDING; isCorresponding = true; }
+        else role = AUTHOR_ROLE.CO_AUTHOR;
+      }
     }
 
     return {
       role,
-      name: n,
-      affiliation: affOf(n),
+      name: a.name,
+      affiliation: a.affiliation || '',
       proportion: 0,
-      isCorresponding
+      isCorresponding,
+      seq: a.seq
     };
   });
 

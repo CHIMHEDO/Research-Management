@@ -3,6 +3,87 @@ const { supabase } = require('./db');
 const { normalizeKeywords } = require('./utils/keywords');
 require('dotenv').config();
 
+/**
+ * Extract full author list from Scopus Abstract Retrieval API response
+ * Returns array of authors with name, affiliation, seq, isCorresponding
+ */
+function extractScopusAuthors(entry = {}) {
+  // Priority 1: Full author list from Abstract Retrieval API
+  const rawAuthors = entry.authors?.author || entry.author || [];
+  const list = Array.isArray(rawAuthors) ? rawAuthors : [rawAuthors].filter(Boolean);
+
+  if (list.length > 0) {
+    return list
+      .map((author) => {
+        const given = author['ce:given-name'] || author.givenName || '';
+        const surname = author.surname || author.lastName || '';
+        const name = [given, surname].filter(Boolean).join(' ').trim() || author.authname || author['ce:indexed-name'] || '';
+        
+        const affiliation = author.affiliation?.affilname || author['affiliation']?.[0]?.affilname || '';
+        
+        const seq = Number(author['@seq'] || author.seq || 0);
+        
+        // Check for corresponding author indicators
+        const isCorresponding = 
+          author['@id'] === entry.correspondence ||
+          String(author['@type'] || '').toLowerCase().includes('corresp') ||
+          String(author['@type'] || '').toLowerCase().includes('correspond');
+        
+        return {
+          name,
+          affiliation,
+          seq,
+          isCorresponding,
+          raw: author // keep raw for debugging
+        };
+      })
+      .filter((author) => author.name)
+      .sort((a, b) => a.seq - b.seq);
+  }
+
+  // Priority 2: Fallback to dc:creator (first author only)
+  const creator = entry['dc:creator'] || entry.creator;
+  if (creator) {
+    return String(creator)
+      .split(/\s*;\s*/)
+      .map((name, index) => ({ name: name.trim(), seq: index + 1, affiliation: '', isCorresponding: index === 0 }));
+  }
+
+  return [];
+}
+
+/**
+ * Extract actual publication date from Scopus entry
+ * Priority: article date > issue cover date > year only
+ */
+function extractPublicationDate(entry = {}) {
+  const coredata = entry.coredata || entry;
+  
+  // Priority 1: Actual article publication date (YYYY-MM-DD)
+  const fullDate = 
+    coredata['prism:coverDate'] ||  // This is often issue cover date
+    coredata['prism:publicationDate'] ||
+    coredata['prism:coverDisplayDate'] ||
+    coredata.coverDate ||
+    entry.coverDate ||
+    '';
+  
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fullDate)) {
+    return fullDate;
+  }
+  
+  // Priority 2: Year only
+  const year = 
+    coredata['prism:coverDisplayDate'] ||
+    coredata['prism:coverDate']?.slice(0, 4) ||
+    coredata.publish_year ||
+    entry.publish_year ||
+    entry.year;
+  
+  const yearOnly = String(year || '').match(/\d{4}/)?.[0];
+  return yearOnly ? `${yearOnly}-01-01` : '';
+}
+
 async function isPaperBlacklisted(userId, title) {
     if (!title) return false;
     const { data: blacklistRows } = await supabase
@@ -239,28 +320,21 @@ const getPaperDetailsByEid = async (eid) => {
     });
     const data = response.data['abstracts-retrieval-response'];
     const coredata = data.coredata || {};
+    const entry = { ...data, coredata };
     
-    // 🌟 Fix 1: Authors - try full authors list first, fallback to dc:creator (first author only)
-    let authorData = data.authors?.author || coredata['dc:creator']?.author;
+    // Extract full author list with seq, affiliation, corresponding status
+    const authors = extractScopusAuthors(entry);
     
-    // Handle case where Scopus returns single object instead of array
-    if (authorData && !Array.isArray(authorData)) {
-      authorData = [authorData];
-    }
+    // Extract actual publication date (article date, not issue cover date)
+    const publication_date = extractPublicationDate(entry);
     
-    const authors = authorData?.map(a => {
-      const firstName = a['ce:given-name'] || '';
-      const lastName = a['ce:surname'] || '';
-      return `${firstName} ${lastName}`.trim();
-    }).filter(name => name.length > 0) || [];
-    
-    // 🌟 Fix 2: Abstract - try multiple fallback fields with graceful fallback
+    // Abstract - try multiple fallback fields
     const abstract = coredata['dc:description'] 
       || coredata['prism:description'] 
       || coredata['description'] 
       || '';
     
-    // 🌟 Fix 3: Keywords - check multiple possible locations with graceful fallback
+    // Keywords - check multiple possible locations
     const keywords = data.authkeywords?.['author-keyword']?.map(k => k.$) 
       || coredata['subject-area']?.map(sa => sa['$']) 
       || [];
@@ -269,12 +343,12 @@ const getPaperDetailsByEid = async (eid) => {
       title: coredata['dc:title'],
       doi: coredata['prism:doi'] || '',
       journal: coredata['prism:publicationName'] || '',
-      publishDate: coredata['prism:coverDate'] || '',
+      publication_date,  // Actual article date, not issue cover date
       volume: coredata['prism:volume'] || '',
       issue: coredata['prism:issueIdentifier'] || '',
       abstract: abstract || '',
-      authors: authors,
-      keywords: keywords
+      authors,  // Full author array with seq, affiliation, isCorresponding
+      keywords: normalizeKeywords(keywords)
     };
     return paperInfo;
   } catch (error) {
@@ -407,13 +481,19 @@ async function getAuthorPapers(authorId) {
       } else if (entry.authors && Array.isArray(entry.authors)) {
         authorsRaw = entry.authors.map(a => a?.authname || a?.['ce:indexed-name']).filter(Boolean).join(', ');
       }
+      
+      // Extract author array if available in search results
+      const authors = entry.author && Array.isArray(entry.author) 
+        ? extractScopusAuthors({ authors: { author: entry.author }, coredata: entry })
+        : [];
 
       return {
         eid: entry.eid ?? null,
         title: entry['dc:title']?.trim() || 'Untitled',
         publish_year: publishYear,
-        coverDate: coverDate, // Full date for publication_date
+        coverDate: coverDate, // Full date for publication_date fallback
         authors_raw: authorsRaw,
+        authors,  // Author array if available in search results
         cited_by: Number(entry['citedby-count'] ?? 0),
         journal: entry['prism:publicationName'] ?? null,
         volume: entry['prism:volume'] ?? null,
@@ -428,7 +508,7 @@ async function getAuthorPapers(authorId) {
 
     // For entries missing key fields, fetch details by EID
     const entriesNeedingDetail = mappedEntries.filter(e => 
-      e.eid && (!e.abstract || !e.keywords?.length || !e.volume || !e.issue)
+      e.eid && (!e.abstract || !e.keywords?.length || !e.volume || !e.issue || !e.authors?.length)
     );
 
     if (entriesNeedingDetail.length > 0) {
@@ -442,7 +522,10 @@ async function getAuthorPapers(authorId) {
             entry.volume = detail.volume || entry.volume;
             entry.issue = detail.issue || entry.issue;
             entry.journal = detail.journal || entry.journal;
-            entry.coverDate = detail.publishDate || entry.coverDate;
+            // Use full author array from detail (prefer detail's authors over search's dc:creator)
+            entry.authors = detail.authors || entry.authors;
+            // Use actual publication date from detail (not issue cover date)
+            entry.publication_date = detail.publication_date || entry.publication_date;
             entry.doi = detail.doi || entry.doi;
           }
         } catch (detailErr) {
