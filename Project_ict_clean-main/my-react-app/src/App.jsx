@@ -31,6 +31,12 @@ import ScholarDashboard from "./components/ScholarDashboard";
 import ScholarImportModal from "./components/ScholarImportModal";
 import PdfUploadModal from "./components/PdfUploadModal";
 import PlanningSimulator from "./components/PlanningSimulator";
+import AdminFacultyOverview from "./components/AdminFacultyOverview";
+import AdminDuplicateCheck from "./components/AdminDuplicateCheck";
+import AdminDisbursement from "./components/AdminDisbursement";
+import AdminAuditLogs from "./components/AdminAuditLogs";
+import UserDisbursementView from "./components/UserDisbursementView";
+import { getPaperAlertSummary } from "./utils/validation";
 import api from "./api/client";
 import "./App.css";
 
@@ -829,6 +835,26 @@ function computeClientCalculation(formState) {
     }
   };
 
+  // ฟังก์ชันอัปเดตข้อมูลผลงาน (เช่น จากหน้าบันทึกการเบิกเงินของ Admin)
+  const handleSaveUpdatedEntry = async (updatedEntry) => {
+    try {
+      const res = await fetch(`${API_URL}/entries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatedEntry)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEntries(data.data);
+        setToast("บันทึกการปรับปรุงข้อมูลเรียบร้อยแล้ว");
+      }
+    } catch (err) {
+      console.error("Error updating entry:", err);
+      setEntries(prev => prev.map(e => e.id === updatedEntry.id ? updatedEntry : e));
+      setToast("บันทึกข้อมูลเรียบร้อย (Local)");
+    }
+  };
+
   // ข้อมูลรอบปีภาระงานปัจจุบัน (เช่น กรกฎาคม 69 - มิถุนายน 70)
   const currentCycleInfo = useMemo(() => getWorkloadCycleInfo(new Date()), []);
   const [selectedCycleFilter, setSelectedCycleFilter] = useState("CURRENT"); // 'CURRENT' | cycleKey | 'ALL'
@@ -1031,7 +1057,7 @@ function computeClientCalculation(formState) {
 
       {/* Main Content Area */}
       <div className="app-content-wrapper">
-        <Header tab={tab} entriesCount={entries.length} />
+        <Header tab={tab} setTab={setTab} entries={entries} />
 
         <main className="app-main">
           {tab === "form" && (
@@ -1858,6 +1884,35 @@ function computeClientCalculation(formState) {
                         <div className="card-badges-left">
                           <span className="entry-code-badge">{e.code || "เกณฑ์"}</span>
                           {renderDbBadge(e.db)}
+
+                          {/* Smart Incomplete & Expiry & Disbursement Badges */}
+                          {(() => {
+                            const summary = getPaperAlertSummary(e);
+                            return (
+                              <div style={{ display: "inline-flex", flexWrap: "wrap", gap: "4px" }}>
+                                {summary.completeness.isIncomplete && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fef3c7", color: "#b45309", border: "1px solid #fde68a" }} title={`สิ่งที่ยังขาด: ${summary.completeness.missingFields.join(", ")}`}>
+                                    ⚠️ ไม่ครบ ({summary.completeness.missingCount})
+                                  </span>
+                                )}
+                                {summary.expiry.isExpired && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>
+                                    ⏳ หมดอายุ 5 ปี
+                                  </span>
+                                )}
+                                {summary.expiry.isExpiring && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fff7ed", color: "#c2410c", border: "1px solid #ffedd5" }}>
+                                    ⏳ {summary.expiry.badgeText}
+                                  </span>
+                                )}
+                                {e.disbursement_status === "DISBURSED" && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#dcfce7", color: "#15803d", border: "1px solid #bbf7d0" }}>
+                                    💵 เบิกแล้ว
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                         <button
                           type="button"
@@ -2015,6 +2070,28 @@ function computeClientCalculation(formState) {
               </div>
             )}
           </div>
+        )}
+
+        {/* User Disbursements Tab */}
+        {tab === "disbursements" && (
+          <UserDisbursementView entries={entries} />
+        )}
+
+        {/* Admin Console Tabs */}
+        {tab === "admin-faculty" && (
+          <AdminFacultyOverview entries={entries} />
+        )}
+
+        {tab === "admin-duplicates" && (
+          <AdminDuplicateCheck entries={entries} onEditEntry={handleEdit} />
+        )}
+
+        {tab === "admin-disbursements" && (
+          <AdminDisbursement entries={entries} onUpdateEntry={handleSaveUpdatedEntry} />
+        )}
+
+        {tab === "admin-audit" && (
+          <AdminAuditLogs entries={entries} />
         )}
 
         {/* Scholar Dashboard Tab */}

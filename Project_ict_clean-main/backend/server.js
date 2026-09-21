@@ -108,9 +108,21 @@ function computeDateInfo(dateStr) {
 
 function formatEntry(row) {
   let dateInfo = row.date_info;
+  let disbursement = {};
   if (typeof dateInfo === "string") {
-    try { dateInfo = JSON.parse(dateInfo); } catch { dateInfo = null; }
+    try { 
+      const parsed = JSON.parse(dateInfo); 
+      dateInfo = parsed;
+      if (parsed && typeof parsed === "object" && parsed.disbursement) {
+        disbursement = parsed.disbursement;
+      }
+    } catch { 
+      dateInfo = null; 
+    }
+  } else if (dateInfo && typeof dateInfo === "object" && dateInfo.disbursement) {
+    disbursement = dateInfo.disbursement;
   }
+
   return {
     id: row.id,
     title: row.title || "",
@@ -140,6 +152,11 @@ function formatEntry(row) {
     uni: Number(row.uni),
     dateInfo: dateInfo,
     savedAt: row.created_at,
+    disbursement_status: disbursement.status || row.disbursement_status || "PENDING",
+    disbursed_at: disbursement.disbursed_at || row.disbursed_at || null,
+    disbursed_amount: disbursement.amount || row.disbursed_amount || null,
+    disbursement_ref_no: disbursement.ref_no || row.disbursement_ref_no || "",
+    disbursement_note: disbursement.note || row.disbursement_note || "",
   };
 }
 
@@ -186,13 +203,28 @@ app.post("/api/entries", async (req, res) => {
       title, authors, author, authorName, affiliations, correspondingAuthor,
       publicationDate, doi, journal, volume, issue, abstract, keywords,
       type, db: selectedDb, proportion, date, code, baseHours, quality,
-      actualHours, faculty, facultyNote, uni, dateInfo
+      actualHours, faculty, facultyNote, uni, dateInfo,
+      disbursement_status, disbursed_at, disbursed_amount, disbursement_ref_no, disbursement_note
     } = req.body;
     const pubDate = publicationDate || date || null;
 
     if (req.body.id) {
       const { error } = await supabase.from("entries").delete().eq("id", req.body.id);
       if (error) throw error;
+    }
+
+    let parsedDateInfo = dateInfo || {};
+    if (typeof parsedDateInfo === "string") {
+      try { parsedDateInfo = JSON.parse(parsedDateInfo); } catch { parsedDateInfo = {}; }
+    }
+    if (disbursement_status || disbursed_at || disbursement_ref_no || disbursed_amount) {
+      parsedDateInfo.disbursement = {
+        status: disbursement_status || "PENDING",
+        disbursed_at: disbursed_at || null,
+        amount: disbursed_amount || null,
+        ref_no: disbursement_ref_no || "",
+        note: disbursement_note || ""
+      };
     }
 
     const entryData = {
@@ -210,7 +242,7 @@ app.post("/api/entries", async (req, res) => {
       faculty: faculty !== undefined ? Number(faculty) : 0,
       faculty_note: facultyNote || "",
       uni: uni !== undefined ? Number(uni) : 0,
-      date_info: dateInfo ? JSON.stringify(dateInfo) : null
+      date_info: JSON.stringify(parsedDateInfo)
     };
 
     const { error: insertError } = await supabase.from("entries").insert([entryData]);

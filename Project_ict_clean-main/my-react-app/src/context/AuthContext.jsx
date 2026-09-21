@@ -46,32 +46,22 @@ export function AuthProvider({ children }) {
             setUser(data.user);
           } else {
             localStorage.removeItem("auth_token");
+            localStorage.removeItem("user_email");
+            setUser(null);
           }
         })
         .catch(err => {
           console.error("Auth verify error:", err);
           localStorage.removeItem("auth_token");
+          localStorage.removeItem("user_email");
+          setUser(null);
         })
         .finally(() => {
           setAuthLoading(false);
         });
     } else {
-      // ค้นหาข้อมูลอาจารย์จริงจาก Database ตามอีเมลที่เคยล็อกอินไว้ หรือค่าเริ่มต้น 67022546@up.ac.th
-      const savedEmail = localStorage.getItem("user_email") || "67022546@up.ac.th";
-      fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(savedEmail)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && data.user) {
-            setUser(data.user);
-            localStorage.setItem("user_email", data.user.email);
-          }
-        })
-        .catch(err => {
-          console.error("Database user lookup error:", err);
-        })
-        .finally(() => {
-          setAuthLoading(false);
-        });
+      setUser(null);
+      setAuthLoading(false);
     }
   }, []);
 
@@ -103,43 +93,25 @@ export function AuthProvider({ children }) {
 
       const cleanEmail = email.toLowerCase().trim();
 
-      // 1. ลองล็อกอินผ่าน Password ก่อน
-      let loginSuccess = false;
-      try {
-        const res = await fetch(`${API_URL}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: cleanEmail, password }),
-        });
-        const data = await res.json();
-        if (res.ok && data.success && data.user) {
-          if (data.token) localStorage.setItem("auth_token", data.token);
-          localStorage.setItem("user_email", cleanEmail);
-          setUser(data.user);
-          setToast(`ยินดีต้อนรับ อาจารย์ ${data.user.full_name || data.user.name_th || data.user.name_en}`);
-          setIsLoggingIn(false);
-          return true;
-        }
-      } catch (err) {
-        // Continue to database email lookup fallback
-      }
-
-      // 2. Fallback: ค้นหาข้อมูลโปรไฟล์อาจารย์จากฐานข้อมูลโดยตรงด้วยอีเมล
-      const lookupRes = await fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(cleanEmail)}`);
-      const lookupData = await lookupRes.json();
-
-      if (lookupData && lookupData.success && lookupData.user) {
+      const res = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail, password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.user) {
+        if (data.token) localStorage.setItem("auth_token", data.token);
         localStorage.setItem("user_email", cleanEmail);
-        localStorage.setItem("auth_token", "custom-token-" + cleanEmail);
-        setUser(lookupData.user);
-        setToast(`เข้าสู่ระบบในชื่อ: ${lookupData.user.full_name || lookupData.user.name_th || lookupData.user.name_en}`);
+        setUser(data.user);
+        const roleLabel = data.user.role === 'admin' ? 'ผู้ดูแลระบบ (Admin)' : 'อาจารย์';
+        setToast(`ยินดีต้อนรับ ${roleLabel}: ${data.user.full_name || data.user.name_th || data.user.name_en}`);
         setIsLoggingIn(false);
         return true;
+      } else {
+        setAuthError(data.message || "อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+        setIsLoggingIn(false);
+        return false;
       }
-
-      setAuthError("ไม่พบข้อมูลอาจารย์จากอีเมลนี้ในระบบฐานข้อมูล (@up.ac.th)");
-      setIsLoggingIn(false);
-      return false;
     } catch (err) {
       console.error("Login error:", err);
       setAuthError("ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาลองใหม่อีกครั้ง");
@@ -155,6 +127,7 @@ export function AuthProvider({ children }) {
       const res = await fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(cleanEmail)}`);
       const data = await res.json();
       if (data.success && data.user) {
+        if (data.token) localStorage.setItem("auth_token", data.token);
         localStorage.setItem("user_email", cleanEmail);
         setUser(data.user);
         setToast(`สลับบัญชีผู้ใช้เป็น: ${data.user.full_name || data.user.name_th || data.user.name_en}`);
