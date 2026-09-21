@@ -245,7 +245,7 @@ async function sendCoAuthorConfirmationEmail({ toEmail, recipientName, submitter
           <p style="font-size: 13px; color: #475569;">ขอความอนุเคราะห์ท่านเข้าสู่ระบบเพื่อตรวจสอบและยืนยันความถูกต้องของสัดส่วนภาระงาน สำหรับนำไปใช้ประเมินภาระงานทางวิชาการต่อไป</p>
 
           <div class="btn-container">
-            <a href="https://research-management-9vlg-git-main-kcalpath.vercel.app/" class="btn" target="_blank">เข้าสู่ระบบเพื่อตรวจสอบสัดส่วนภาระงาน</a>
+            <a href="${siteUrl}" class="btn" target="_blank">เข้าสู่ระบบเพื่อตรวจสอบสัดส่วนภาระงาน</a>
           </div>
         </div>
         <div class="footer">

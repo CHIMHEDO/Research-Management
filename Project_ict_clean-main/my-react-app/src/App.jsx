@@ -835,23 +835,31 @@ function computeClientCalculation(formState) {
     }
   };
 
-  // ฟังก์ชันอัปเดตข้อมูลผลงาน (เช่น จากหน้าบันทึกการเบิกเงินของ Admin)
-  const handleSaveUpdatedEntry = async (updatedEntry) => {
+  // 🤝 ฟังก์ชันกดยืนยันสัดส่วนผู้ร่วมงาน (Confirm Proportion)
+  const handleConfirmProportion = async (entryId) => {
     try {
-      const res = await fetch(`${API_URL}/entries`, {
+      const res = await fetch(`${API_URL}/entries/${entryId}/confirm`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedEntry)
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify({
+          userId: user?.id || null,
+          userName: user?.name_th || user?.name_en || user?.full_name || "",
+          userEmail: user?.email || ""
+        })
       });
       const data = await res.json();
       if (data.success) {
-        setEntries(data.data);
-        setToast("บันทึกการปรับปรุงข้อมูลเรียบร้อยแล้ว");
+        if (data.data) setEntries(data.data);
+        if (setToast) setToast(data.message || "ยืนยันสัดส่วนเรียบร้อยแล้ว");
+      } else {
+        alert(data.message || "ไม่สามารถยืนยันสัดส่วนได้");
       }
     } catch (err) {
-      console.error("Error updating entry:", err);
-      setEntries(prev => prev.map(e => e.id === updatedEntry.id ? updatedEntry : e));
-      setToast("บันทึกข้อมูลเรียบร้อย (Local)");
+      console.error("Confirm proportion error:", err);
+      if (setToast) setToast("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์");
     }
   };
 
@@ -954,20 +962,29 @@ function computeClientCalculation(formState) {
     });
   }, [userEntries, selectedCycleFilter, activeCycleKey]);
 
-  // สรุปยอดตามรอบปีภาระงาน
+  // สรุปยอดตามรอบปีภาระงาน (นับเฉพาะผลงานที่ยืนยันแล้ว หรือผ่านไป 7 วัน Auto-Lock)
   const totals = useMemo(() => {
     let hours = 0, faculty = 0, uni = 0;
+    let countedCount = 0;
+
     cycleFilteredEntries.forEach(e => {
-      hours += e.actualHours || 0;
-      faculty += e.faculty || 0;
-      uni += e.uni || 0;
+      // 🔒 ตรวจสอบว่าผลงานได้รับการยืนยันหรือผ่าน 7 วันหรือไม่
+      const isCounted = e.is_workload_counted !== false;
+      if (isCounted) {
+        hours += e.actualHours || 0;
+        faculty += e.faculty || 0;
+        uni += e.uni || 0;
+        countedCount += 1;
+      }
     });
+
     return {
       hours: Math.round(hours * 100) / 100,
       faculty,
       uni,
-      count: cycleFilteredEntries.length,
-      allCount: userEntries.length
+      count: countedCount,
+      allCount: userEntries.length,
+      pendingCount: cycleFilteredEntries.length - countedCount
     };
   }, [cycleFilteredEntries, userEntries.length]);
 
@@ -1792,13 +1809,18 @@ function computeClientCalculation(formState) {
                   <span className="kpi-term-pill">{activeCycleLabel}</span>
                 </div>
                 <div>
-                  <div className="kpi-title-label">ผลงานทั้งหมดในรอบนี้</div>
+                  <div className="kpi-title-label">ผลงานที่นับเป็นภาระงานแล้ว</div>
                   <div className="kpi-main-number">
                     {totals.count} <span className="kpi-unit-label">ชิ้น</span>
                   </div>
-                  {selectedCycleFilter !== "ALL" && entries.length > totals.count && (
+                  {totals.pendingCount > 0 && (
+                    <div style={{ fontSize: "11px", color: "#b45309", fontWeight: "600", marginTop: "4px" }}>
+                      ⏳ รอผู้ร่วมงานยืนยัน {totals.pendingCount} ชิ้น (นับหลัง 7 วัน)
+                    </div>
+                  )}
+                  {selectedCycleFilter !== "ALL" && userEntries.length > totals.count && totals.pendingCount === 0 && (
                     <div className="kpi-sub-total-note">
-                      รวมทั้งหมด {entries.length} ชิ้น (ทุกรอบปี)
+                      รวมทั้งหมด {userEntries.length} ชิ้น (ทุกรอบปี)
                     </div>
                   )}
                 </div>
@@ -1949,20 +1971,87 @@ function computeClientCalculation(formState) {
                                     💵 เบิกแล้ว
                                   </span>
                                 )}
+                                {/* 🤝 Co-Author Confirmation Badges */}
+                                {e.confirmation_status === "CONFIRMED" && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#ecfdf5", color: "#047857", border: "1px solid #a7f3d0" }} title="ผู้แต่งทุกคนยืนยันสัดส่วนครบถ้วนแล้ว">
+                                    ✓ สัดส่วนได้รับการยืนยันแล้ว
+                                  </span>
+                                )}
+                                {e.confirmation_status === "AUTO_CONFIRMED" && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0" }} title="ครบ 7 วันตามเกณฑ์ โดยไม่มีการคัดค้าน ระบบอนุมัติสัดส่วนอัตโนมัติ">
+                                    ✓ ยืนยันอัตโนมัติ (ครบ 7 วัน)
+                                  </span>
+                                )}
+                                {e.confirmation_status === "PENDING" && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fffbeb", color: "#b45309", border: "1px solid #fde68a" }} title={`รอผู้ร่วมงานยืนยันสัดส่วน (หากไม่มีการแก้ไข จะอนุมัติอัตโนมัติในอีก ${e.confirmation_days_remaining || 7} วัน)`}>
+                                    ⏳ รอผู้ร่วมงานยืนยัน ({e.confirmation_days_remaining} วัน)
+                                  </span>
+                                )}
                               </div>
                             );
                           })()}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleEdit(e)}
-                          title="ปรับแต่งข้อมูลผลงาน"
-                          className="card-btn-edit"
-                        >
-                          <Pencil size={14} />
-                          <span>ปรับแต่ง</span>
-                        </button>
-                      </div>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                            {/* ปุ่มกดยืนยันสัดส่วนสำหรับผู้ร่วมงาน */}
+                            {(() => {
+                              const userNameTh = (user?.name_th || '').toLowerCase().trim();
+                              const userNameEn = (user?.name_en || '').toLowerCase().trim();
+                              const userFullName = (user?.full_name || '').toLowerCase().trim();
+                              const userEmail = (user?.email || '').toLowerCase().trim();
+                              
+                              const confirmedByList = (e.confirmed_by || []).map(c => String(c).toLowerCase().trim());
+                              const isAlreadyConfirmed = confirmedByList.some(c => 
+                                (userNameTh && c.includes(userNameTh)) || 
+                                (userNameEn && c.includes(userNameEn)) || 
+                                (userFullName && c.includes(userFullName)) || 
+                                (userEmail && c.includes(userEmail))
+                              );
+
+                              const isCoAuthorInPaper = (e.authors || '').toLowerCase().includes(userNameTh) ||
+                                                        (e.authors || '').toLowerCase().includes(userNameEn) ||
+                                                        (e.authorName || '').toLowerCase().includes(userNameTh) ||
+                                                        (e.authorName || '').toLowerCase().includes(userNameEn);
+
+                              if (e.confirmation_status === 'PENDING' && isCoAuthorInPaper && !isAlreadyConfirmed) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmProportion(e.id)}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                      padding: "5px 10px",
+                                      borderRadius: "6px",
+                                      border: "none",
+                                      background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                      color: "#ffffff",
+                                      fontSize: "12px",
+                                      fontWeight: "700",
+                                      cursor: "pointer",
+                                      boxShadow: "0 2px 4px rgba(16, 185, 129, 0.25)"
+                                    }}
+                                    title="กดยืนยันสัดส่วนผู้แต่งของคุณสำหรับผลงานนี้"
+                                  >
+                                    <CheckCircle2 size={13} />
+                                    <span>ยืนยันสัดส่วน</span>
+                                  </button>
+                                );
+                              }
+                              return null;
+                            })()}
+
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(e)}
+                              title="ปรับแต่งข้อมูลผลงาน"
+                              className="card-btn-edit"
+                            >
+                              <Pencil size={14} />
+                              <span>ปรับแต่ง</span>
+                            </button>
+                          </div>
+                        </div>
 
                       {/* Publication Title */}
                       <h3 className="card-publication-title" title={e.title || e.type}>
@@ -2091,16 +2180,65 @@ function computeClientCalculation(formState) {
                           </span>
                         </td>
                         <td style={{ textAlign: "center" }}>
-                          <button
-                            type="button"
-                            onClick={() => handleEdit(e)}
-                            className="btn-edit-table"
-                            title="ปรับแต่งข้อมูลผลงาน"
-                            style={{ margin: "0 auto" }}
-                          >
-                            <Pencil size={13} />
-                            <span>ปรับแต่ง</span>
-                          </button>
+                          <div style={{ display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
+                            {(() => {
+                              const userNameTh = (user?.name_th || '').toLowerCase().trim();
+                              const userNameEn = (user?.name_en || '').toLowerCase().trim();
+                              const userFullName = (user?.full_name || '').toLowerCase().trim();
+                              const userEmail = (user?.email || '').toLowerCase().trim();
+                              
+                              const confirmedByList = (e.confirmed_by || []).map(c => String(c).toLowerCase().trim());
+                              const isAlreadyConfirmed = confirmedByList.some(c => 
+                                (userNameTh && c.includes(userNameTh)) || 
+                                (userNameEn && c.includes(userNameEn)) || 
+                                (userFullName && c.includes(userFullName)) || 
+                                (userEmail && c.includes(userEmail))
+                              );
+
+                              const isCoAuthorInPaper = (e.authors || '').toLowerCase().includes(userNameTh) ||
+                                                        (e.authors || '').toLowerCase().includes(userNameEn) ||
+                                                        (e.authorName || '').toLowerCase().includes(userNameTh) ||
+                                                        (e.authorName || '').toLowerCase().includes(userNameEn);
+
+                              if (e.confirmation_status === 'PENDING' && isCoAuthorInPaper && !isAlreadyConfirmed) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmProportion(e.id)}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "3px",
+                                      padding: "4px 8px",
+                                      borderRadius: "6px",
+                                      border: "none",
+                                      background: "#10b981",
+                                      color: "#ffffff",
+                                      fontSize: "11px",
+                                      fontWeight: "700",
+                                      cursor: "pointer"
+                                    }}
+                                    title="กดยืนยันสัดส่วนผู้แต่ง"
+                                  >
+                                    <CheckCircle2 size={12} />
+                                    <span>ยืนยันสัดส่วน</span>
+                                  </button>
+                                );
+                              }
+                              return null;
+                            })()}
+
+                            <button
+                              type="button"
+                              onClick={() => handleEdit(e)}
+                              className="btn-edit-table"
+                              title="ปรับแต่งข้อมูลผลงาน"
+                              style={{ margin: 0 }}
+                            >
+                              <Pencil size={13} />
+                              <span>ปรับแต่ง</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

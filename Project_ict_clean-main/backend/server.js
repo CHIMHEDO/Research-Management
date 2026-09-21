@@ -109,19 +109,39 @@ function computeDateInfo(dateStr) {
 function formatEntry(row) {
   let dateInfo = row.date_info;
   let disbursement = {};
+  let confirmation = null;
+
   if (typeof dateInfo === "string") {
     try { 
       const parsed = JSON.parse(dateInfo); 
       dateInfo = parsed;
-      if (parsed && typeof parsed === "object" && parsed.disbursement) {
-        disbursement = parsed.disbursement;
+      if (parsed && typeof parsed === "object") {
+        if (parsed.disbursement) disbursement = parsed.disbursement;
+        if (parsed.confirmation) confirmation = parsed.confirmation;
       }
     } catch { 
       dateInfo = null; 
     }
-  } else if (dateInfo && typeof dateInfo === "object" && dateInfo.disbursement) {
-    disbursement = dateInfo.disbursement;
+  } else if (dateInfo && typeof dateInfo === "object") {
+    if (dateInfo.disbursement) disbursement = dateInfo.disbursement;
+    if (dateInfo.confirmation) confirmation = dateInfo.confirmation;
   }
+
+  // ⏰ คำนวณสถานะการยืนยันสัดส่วน 7 วัน (7-Day Auto-Lock Rule)
+  const createdAtMs = row.created_at ? new Date(row.created_at).getTime() : Date.now();
+  const deadlineMs = confirmation?.deadline ? new Date(confirmation.deadline).getTime() : (createdAtMs + 7 * 86400000);
+  const nowMs = Date.now();
+  const isPast7Days = nowMs >= deadlineMs;
+
+  let confirmedAuthors = Array.isArray(confirmation?.confirmed_by) ? confirmation.confirmed_by : [];
+  let authorListMeta = Array.isArray(confirmation?.author_list) ? confirmation.confirmation_author_list || confirmation.author_list : [];
+
+  let confirmationStatus = confirmation?.status || (isPast7Days ? "AUTO_CONFIRMED" : "PENDING");
+  if (confirmationStatus === "PENDING" && isPast7Days) {
+    confirmationStatus = "AUTO_CONFIRMED";
+  }
+
+  const daysRemaining = Math.max(0, Math.ceil((deadlineMs - nowMs) / 86400000));
 
   return {
     id: row.id,
@@ -160,6 +180,13 @@ function formatEntry(row) {
     disbursed_amount: disbursement.amount || row.disbursed_amount || null,
     disbursement_ref_no: disbursement.ref_no || row.disbursement_ref_no || "",
     disbursement_note: disbursement.note || row.disbursement_note || "",
+    // 🤝 ข้อมูลยืนยันสัดส่วนผู้ร่วมงาน (Co-author Confirmation State)
+    confirmation_status: confirmationStatus, // 'PENDING' | 'CONFIRMED' | 'AUTO_CONFIRMED'
+    confirmation_deadline: new Date(deadlineMs).toISOString(),
+    confirmation_days_remaining: daysRemaining,
+    confirmed_by: confirmedAuthors,
+    author_list: authorListMeta,
+    is_workload_counted: (confirmationStatus === "CONFIRMED" || confirmationStatus === "AUTO_CONFIRMED")
   };
 }
 
@@ -234,6 +261,33 @@ app.post("/api/entries", async (req, res) => {
       parsedDateInfo.submitter_email = req.body.userEmail || req.body.user_email;
     }
 
+    // 🤝 เตรียมข้อมูลการยืนยันสัดส่วน (Co-author Confirmation Metadata)
+    let processedAuthorList = req.body.authorList;
+    if (!Array.isArray(processedAuthorList) || processedAuthorList.length === 0) {
+      if (authors) {
+        const names = authors.split(/[,;]/).map(n => n.trim()).filter(Boolean);
+        processedAuthorList = names.map((name, idx) => ({
+          name,
+          role: idx === 0 ? "First author" : "Co author",
+          proportion: idx === 0 ? (proportion || 100) : 0
+        }));
+      } else if (authorName) {
+        processedAuthorList = [{ name: authorName, role: author || "First author", proportion: proportion || 100 }];
+      }
+    }
+
+    const submitterIdentifier = (authorName || userEmail || 'submitter').toLowerCase().trim();
+    const existingConfirmedBy = parsedDateInfo.confirmation?.confirmed_by || [submitterIdentifier];
+    const initialDeadline = parsedDateInfo.confirmation?.deadline || new Date(Date.now() + 7 * 86400000).toISOString();
+    const isOnlyOneAuthor = (processedAuthorList?.length || 1) <= 1;
+
+    parsedDateInfo.confirmation = {
+      status: parsedDateInfo.confirmation?.status || (isOnlyOneAuthor ? "CONFIRMED" : "PENDING"),
+      deadline: initialDeadline,
+      confirmed_by: existingConfirmedBy,
+      author_list: processedAuthorList || []
+    };
+
     const entryData = {
       id, 
       user_id: req.body.userId || req.body.user_id || null,
@@ -262,20 +316,6 @@ app.post("/api/entries", async (req, res) => {
     if (fetchError) throw fetchError;
 
     // 📧 ส่งอีเมลแจ้งเตือนผู้แต่งทุกคนที่พบใน Database อัตโนมัติ (Async Background)
-    let processedAuthorList = req.body.authorList;
-    if (!Array.isArray(processedAuthorList) || processedAuthorList.length === 0) {
-      if (authors) {
-        const names = authors.split(/[,;]/).map(n => n.trim()).filter(Boolean);
-        processedAuthorList = names.map((name, idx) => ({
-          name,
-          role: idx === 0 ? "First author" : "Co author",
-          proportion: idx === 0 ? (proportion || 100) : 0
-        }));
-      } else if (authorName) {
-        processedAuthorList = [{ name: authorName, role: author || "First author", proportion: proportion || 100 }];
-      }
-    }
-
     if (Array.isArray(processedAuthorList) && processedAuthorList.length > 0) {
       console.log(`[Email Workflow] ตรวจพบผู้แต่ง ${processedAuthorList.length} คน สำหรับบทความ: "${title || 'ผลงานวิจัย'}" กำลังเริ่มค้นหาในฐานข้อมูลและส่งอีเมลแจ้งเตือนทันที...`);
       triggerCoAuthorNotificationWorkflow({
@@ -297,7 +337,98 @@ app.post("/api/entries", async (req, res) => {
   }
 });
 
-// 1.4 API ลบรายการภาระงาน
+// 1.4 API ยืนยันสัดส่วนผู้ร่วมงาน (Co-author Proportion Confirmation)
+app.post("/api/entries/:id/confirm", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userName, userEmail, userId } = req.body;
+    const userIdentifier = (userName || userEmail || userId || "").toLowerCase().trim();
+
+    if (!userIdentifier) {
+      return res.status(400).json({ success: false, message: "ไม่พบข้อมูลผู้ยืนยัน" });
+    }
+
+    const { data: entryRows, error: fetchErr } = await supabase
+      .from("entries")
+      .select("*")
+      .eq("id", id)
+      .limit(1);
+
+    if (fetchErr || !entryRows || entryRows.length === 0) {
+      return res.status(404).json({ success: false, message: "ไม่พบผลงานที่ต้องการยืนยัน" });
+    }
+
+    const entry = entryRows[0];
+    let parsedDateInfo = {};
+    if (typeof entry.date_info === "string") {
+      try { parsedDateInfo = JSON.parse(entry.date_info); } catch { parsedDateInfo = {}; }
+    } else if (entry.date_info && typeof entry.date_info === "object") {
+      parsedDateInfo = entry.date_info;
+    }
+
+    const confirmation = parsedDateInfo.confirmation || {
+      status: "PENDING",
+      deadline: new Date(new Date(entry.created_at || Date.now()).getTime() + 7 * 86400000).toISOString(),
+      confirmed_by: [],
+      author_list: []
+    };
+
+    const confirmedSet = new Set((confirmation.confirmed_by || []).map(c => String(c).toLowerCase().trim()));
+    confirmedSet.add(userIdentifier);
+    if (userName) confirmedSet.add(userName.toLowerCase().trim());
+    if (userEmail) confirmedSet.add(userEmail.toLowerCase().trim());
+
+    // ตรวจสอบว่าผู้ร่วมงานทุกคนกดยืนยันครบหรือยัง
+    const authorList = confirmation.author_list || [];
+    let isAllConfirmed = false;
+
+    if (authorList.length > 0) {
+      const allConfirmedCheck = authorList.every(author => {
+        const aName = (author.name || "").toLowerCase().trim();
+        if (!aName) return true;
+        for (const c of confirmedSet) {
+          if (c && (c.includes(aName) || aName.includes(c))) return true;
+        }
+        return false;
+      });
+      isAllConfirmed = allConfirmedCheck;
+    } else {
+      isAllConfirmed = true;
+    }
+
+    parsedDateInfo.confirmation = {
+      ...confirmation,
+      status: isAllConfirmed ? "CONFIRMED" : "PENDING",
+      confirmed_by: Array.from(confirmedSet),
+      confirmed_at: new Date().toISOString()
+    };
+
+    const { error: updateErr } = await supabase
+      .from("entries")
+      .update({ date_info: JSON.stringify(parsedDateInfo) })
+      .eq("id", id);
+
+    if (updateErr) throw updateErr;
+
+    const { data: allRows, error: allErr } = await supabase
+      .from("entries")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (allErr) throw allErr;
+
+    res.json({
+      success: true,
+      message: isAllConfirmed ? "ผู้ร่วมงานทุกคนยืนยันสัดส่วนครบถ้วนแล้ว" : "บันทึกการยืนยันสัดส่วนของท่านเรียบร้อยแล้ว",
+      data: allRows.map(formatEntry)
+    });
+  } catch (error) {
+    console.error("Confirm proportion error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 1.5 API ลบรายการภาระงาน
 app.delete("/api/entries/:id", async (req, res) => {
   try {
     const { id } = req.params;
