@@ -45,33 +45,40 @@ export function AuthProvider({ children }) {
           if (data.success && data.user) {
             setUser(data.user);
           } else {
-            localStorage.removeItem("auth_token");
+            // กรณีเป็น custom session จาก lookup email
+            const savedEmail = localStorage.getItem("user_email");
+            if (savedEmail) {
+              return fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(savedEmail)}`)
+                .then(r => r.json())
+                .then(lookupData => {
+                  if (lookupData.success && lookupData.user) {
+                    setUser(lookupData.user);
+                  } else {
+                    localStorage.removeItem("auth_token");
+                    localStorage.removeItem("user_email");
+                    setUser(null);
+                  }
+                });
+            } else {
+              localStorage.removeItem("auth_token");
+              localStorage.removeItem("user_email");
+              setUser(null);
+            }
           }
         })
         .catch(err => {
           console.error("Auth verify error:", err);
           localStorage.removeItem("auth_token");
+          localStorage.removeItem("user_email");
+          setUser(null);
         })
         .finally(() => {
           setAuthLoading(false);
         });
     } else {
-      // ค้นหาข้อมูลอาจารย์จริงจาก Database ตามอีเมลที่เคยล็อกอินไว้ หรือค่าเริ่มต้น 67022546@up.ac.th
-      const savedEmail = localStorage.getItem("user_email") || "67022546@up.ac.th";
-      fetch(`${API_URL}/auth/lookup-email/${encodeURIComponent(savedEmail)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && data.user) {
-            setUser(data.user);
-            localStorage.setItem("user_email", data.user.email);
-          }
-        })
-        .catch(err => {
-          console.error("Database user lookup error:", err);
-        })
-        .finally(() => {
-          setAuthLoading(false);
-        });
+      // หากไม่มี Token ให้ตั้งค่า user เป็น null เพื่อแสดงหน้าเข้าสู่ระบบ (LoginPage)
+      setUser(null);
+      setAuthLoading(false);
     }
   }, []);
 
