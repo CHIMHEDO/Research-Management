@@ -92,11 +92,11 @@ export function getPaperAlertSummary(paper) {
   }
 
   // 🤝 แจ้งเตือนสัดส่วนผู้ร่วมงานที่ยังไม่ยืนยัน
-  if (entry.confirmation_status === "PENDING") {
+  if (paper && paper.confirmation_status === "PENDING") {
     alerts.push({
       type: "confirmation_pending",
       level: "warning",
-      title: `รอการยืนยันสัดส่วนผู้ร่วมงาน (เหลืออีก ${entry.confirmation_days_remaining || 7} วัน)`,
+      title: `รอการยืนยันสัดส่วนผู้ร่วมงาน (เหลืออีก ${paper.confirmation_days_remaining || 7} วัน)`,
       description: "จะนับเป็นภาระงานอัตโนมัติเมื่อครบ 7 วัน หรือเมื่อผู้แต่งทุกคนกดยืนยัน"
     });
   }
