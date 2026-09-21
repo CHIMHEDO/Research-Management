@@ -22,10 +22,9 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid
+      // Token expired or invalid - clear stored token cleanly without breaking SPA routing
       localStorage.removeItem('auth_token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      localStorage.removeItem('user_email');
     }
     return Promise.reject(error);
   }

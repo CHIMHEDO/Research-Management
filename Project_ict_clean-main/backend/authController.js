@@ -200,29 +200,48 @@ exports.loginWithEmail = async (req, res) => {
     }
 
     // ค้นหาผู้ใช้จากฐานข้อมูล
-    const { data: user, error } = await supabase.from('users').select('*, programs(*)').eq('email', email.toLowerCase()).single();
+    let { data: user, error } = await supabase.from('users').select('*, programs(*)').ilike('email', email.toLowerCase().trim()).maybeSingle();
 
-    if (error || !user) {
-      return res.status(401).json({ success: false, message: 'ไม่พบบัญชีผู้ใช้นี้ในระบบ' });
+    // ถ้ายังไม่มีใน users ให้ค้นหาใน UP_ICT_FACULTY แล้วสร้างอัตโนมัติ
+    if (!user) {
+      const matchedFaculty = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === email.toLowerCase().trim());
+      if (matchedFaculty) {
+        const { data: insertedUser } = await supabase.from('users').insert({
+          email: matchedFaculty.email.toLowerCase().trim(),
+          full_name: matchedFaculty.name_en || matchedFaculty.name_th,
+          name_en: matchedFaculty.name_en,
+          name_th: matchedFaculty.name_th,
+          department: matchedFaculty.department,
+          position: matchedFaculty.position,
+          scholar_id: matchedFaculty.scholar_id,
+          scopus_id: matchedFaculty.scopus_id,
+          role: 'user'
+        }).select('*, programs(*)');
+        if (insertedUser && insertedUser.length > 0) {
+          user = insertedUser[0];
+        }
+      }
     }
 
-    if (!user.password_hash) {
-      return res.status(401).json({ success: false, message: 'บัญชีนี้ยังไม่ได้ตั้งรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบ' });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'ไม่พบบัญชีผู้ใช้นี้ในระบบมหาวิทยาลัยพะเยา' });
     }
 
-    // ตรวจสอบรหัสผ่าน
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง' });
+    // ตรวจสอบรหัสผ่าน (หากมี password_hash ในระบบ)
+    if (user.password_hash) {
+      const isMatch = await bcrypt.compare(password, user.password_hash);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'รหัสผ่านไม่ถูกต้อง กรุณาลองใหม่อีกครั้ง' });
+      }
     }
 
-    // ออก JWT Token
+    // ออก JWT Token ที่ถูกต้องและเข้ารหัสด้วย JWT_SECRET เสมอ
     const token = jwt.sign(
       {
         id: user.id,
         email: user.email,
         full_name: user.full_name,
-        role: user.role,
+        role: user.role || 'user',
         program_id: user.program_id,
       },
       JWT_SECRET,
@@ -239,7 +258,7 @@ exports.loginWithEmail = async (req, res) => {
       position: user.position,
       scholar_id: user.scholar_id,
       scopus_id: user.scopus_id,
-      role: user.role,
+      role: user.role || 'user',
       program_id: user.program_id,
       program_name: user.programs?.[0]?.name || null,
     });
@@ -290,7 +309,7 @@ exports.registerUser = async (req, res) => {
   }
 };
 
-// 9. ค้นหาข้อมูลโปรไฟล์อาจารย์จากอีเมล (เช่น 67022546@up.ac.th -> KITTIPONG TRAKONSATHON)
+// 9. ค้นหาข้อมูลโปรไฟล์อาจารย์จากอีเมล (พร้อมออก JWT Token)
 exports.lookupUserByEmail = async (req, res) => {
   try {
     const { email } = req.params;
@@ -308,27 +327,51 @@ exports.lookupUserByEmail = async (req, res) => {
       .limit(1);
 
     if (!error && users && users.length > 0) {
-      const user = users[0];
-      return res.json({ success: true, user: enrichUserWithFaculty(user) });
+      const user = enrichUserWithFaculty(users[0]);
+      const token = jwt.sign(
+        {
+          id: user.id,
+          email: user.email,
+          full_name: user.full_name,
+          role: user.role || 'user',
+          program_id: user.program_id,
+        },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+      return res.json({ success: true, token, user });
     }
 
     // 2. หาใน UP_ICT_FACULTY
     const matched = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === cleanEmail);
     if (matched) {
+      const userObj = {
+        id: null,
+        email: matched.email,
+        full_name: matched.name_en || matched.name_th,
+        name_en: matched.name_en,
+        name_th: matched.name_th,
+        department: matched.department || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร',
+        position: matched.position || 'อาจารย์',
+        scholar_id: matched.scholar_id,
+        scopus_id: matched.scopus_id,
+        role: 'user'
+      };
+      const token = jwt.sign(
+        {
+          id: userObj.id || 0,
+          email: userObj.email,
+          full_name: userObj.full_name,
+          role: 'user',
+          program_id: null,
+        },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
       return res.json({
         success: true,
-        user: {
-          id: null,
-          email: matched.email,
-          full_name: matched.name_en || matched.name_th,
-          name_en: matched.name_en,
-          name_th: matched.name_th,
-          department: matched.department || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร',
-          position: matched.position || 'อาจารย์',
-          scholar_id: matched.scholar_id,
-          scopus_id: matched.scopus_id,
-          role: 'user'
-        }
+        token,
+        user: userObj
       });
     }
 
