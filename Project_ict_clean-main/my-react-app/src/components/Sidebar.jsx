@@ -69,7 +69,7 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
           className={`sidebar-menu-btn ${tab === 'planning' ? 'active' : ''}`}
         >
           <Target size={18} />
-          <span>วางแผนภาระงาน</span>
+          <span>จำลองภาระงาน</span>
         </button>
 
         <button
