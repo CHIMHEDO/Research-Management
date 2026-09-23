@@ -70,7 +70,7 @@ export default function Header({ tab, setTab, entries = [] }) {
           )}
         </div>
 
-        {/* Right Header Actions: Notification Bell, Profile */}
+        {/* Right Header Actions: Notification Bell */}
         <div className="ams-header-right-actions" style={{ position: 'relative' }}>
           <button 
             type="button" 
@@ -98,15 +98,6 @@ export default function Header({ tab, setTab, entries = [] }) {
               </span>
             )}
           </button>
-
-          {/* User Profile Avatar */}
-          {user && (
-            <div className="ams-user-profile-circle" title={`${user.full_name || user.email} (${user.department || 'ICT'})`}>
-              <div className="ams-avatar-img">
-                {user.full_name ? user.full_name.charAt(0).toUpperCase() : "U"}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 

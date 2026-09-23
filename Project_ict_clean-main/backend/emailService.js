@@ -393,6 +393,8 @@ async function triggerCoAuthorNotificationWorkflow({ paperId, submitterUserId, s
 }
 
 module.exports = {
+  sanitizePersonName,
+  isStrictNameMatch,
   findAuthorEmailByName,
   sendCoAuthorConfirmationEmail,
   triggerCoAuthorNotificationWorkflow

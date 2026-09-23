@@ -394,12 +394,13 @@ export default function PlanningSimulator({ onApplyToForm }) {
             </div>
           )}
 
-          {/* Forward to full entry form */}
+          {/* Forward to full entry form (Sticky Card) */}
           {onApplyToForm && (
             <button
               type="button"
               onClick={handleApply}
               className="btn-purple-save"
+              style={{ marginTop: "14px" }}
             >
               <span>นำข้อมูลนี้ไปกรอกบันทึกจริง</span>
               <ArrowRight size={17} />

@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
 const fs = require("fs");
-const { supabase, initDatabase } = require("./db");
+const { supabase, initDatabase, UP_ICT_FACULTY } = require("./db");
 const authRoutes = require("./authRoutes");
 const { extractMetadataWithGemini } = require("./llmService");
 const {
@@ -21,7 +21,11 @@ const {
 } = require("./scholarService");
 const { enrichByDoi, findDoiByTitle } = require("./crossrefService");
 const { initScholarCron, getCronStatus } = require("./cronService");
-const { triggerCoAuthorNotificationWorkflow } = require("./emailService");
+const { 
+  triggerCoAuthorNotificationWorkflow,
+  sanitizePersonName,
+  isStrictNameMatch 
+} = require("./emailService");
 require("dotenv").config();
 
 const app = express();
@@ -62,17 +66,70 @@ const LOOKUP_TABLE = [
 ];
 
 function calculateFacultyFunding(type, author, baseFaculty) {
+  const isFirst = author === "First author" || author === "First & Corresponding author" || author === "First Author";
+  const isCorr = author === "Corresponding author" || author === "First & Corresponding author" || author === "Corresponding Author";
+  const isCo = author === "Co author" || author === "Co Author" || author === "Co-author";
+
   if (type === "การประชุมวิชาการระดับชาติ") {
-    if (author === "First author") return 1000;
-    if (author === "Corresponding author") return 500;
+    if (isFirst) return 1000;
+    if (isCorr) return 500;
     return 0;
   }
   if (type === "การประชุมวิชาการระดับนานาชาติ") {
-    if (author === "First author" || author === "Corresponding author") return 9000;
-    if (author === "Co author") return 2500;
+    if (isFirst || isCorr) return 9000;
+    if (isCo) return 2500;
     return 0;
   }
   return baseFaculty;
+}
+
+function findAuthorRowForUserBackend(authorList, { authorName, userEmail, userFullName, name_th, name_en, authorRole }) {
+  if (!Array.isArray(authorList) || authorList.length === 0) return null;
+
+  const candidateNames = new Set();
+  if (authorName) candidateNames.add(authorName);
+  if (userFullName) candidateNames.add(userFullName);
+  if (name_th) candidateNames.add(name_th);
+  if (name_en) candidateNames.add(name_en);
+
+  if (userEmail || authorName || userFullName) {
+    const cleanUserEmail = (userEmail || '').toLowerCase().trim();
+    const matchedStaff = (UP_ICT_FACULTY || []).find(staff => {
+      if (cleanUserEmail && staff.email && staff.email.toLowerCase().trim() === cleanUserEmail) return true;
+      for (const cName of candidateNames) {
+        if (isStrictNameMatch(sanitizePersonName(cName), sanitizePersonName(staff.name_th)) ||
+            isStrictNameMatch(sanitizePersonName(cName), sanitizePersonName(staff.name_en))) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (matchedStaff) {
+      if (matchedStaff.name_th) candidateNames.add(matchedStaff.name_th);
+      if (matchedStaff.name_en) candidateNames.add(matchedStaff.name_en);
+    }
+  }
+
+  const candidateList = Array.from(candidateNames).filter(Boolean);
+
+  for (let i = 0; i < authorList.length; i++) {
+    const author = authorList[i];
+    const cleanAName = sanitizePersonName(author.name || '');
+    if (!cleanAName) continue;
+
+    for (const cName of candidateList) {
+      if (isStrictNameMatch(cleanAName, sanitizePersonName(cName))) {
+        return { ...author, matchIndex: i, isUserMatched: true };
+      }
+    }
+  }
+
+  if (authorList.length === 1) {
+    return { ...authorList[0], matchIndex: 0, isUserMatched: true };
+  }
+
+  return { ...authorList[0], matchIndex: 0, isUserMatched: false };
 }
 
 function computeDateInfo(dateStr) {
@@ -196,19 +253,61 @@ function formatEntry(row) {
     ========================================== */
 
 app.post("/api/calculate", (req, res) => {
-  const { author, authorName, type, db: selectedDb, proportion, date, publicationDate, authorList } = req.body;
-  const lookup = LOOKUP_TABLE.find((r) => r.type === type && r.db === selectedDb);
-  if (!lookup) return res.json({ success: false, message: "No match found" });
+  const { author, authorName, userEmail, userFullName, name_th, name_en, type, db: selectedDb, proportion, date, publicationDate, authorList } = req.body;
+  
+  if (!type) {
+    return res.json({
+      success: true,
+      data: {
+        code: "-",
+        hours: 0,
+        quality: 0,
+        faculty: 0,
+        facultyNote: "กรุณากดเลือกกลุ่มประเภทผลงานวิชาการ",
+        uni: 0,
+        actualHours: 0,
+        effectiveRole: author || "First author",
+        userProportion: proportion || 0,
+        matchedAuthorName: ""
+      }
+    });
+  }
 
-  const matchedAuthor = (Array.isArray(authorList) ? authorList : []).find(a => 
-    a.name && authorName && a.name.toLowerCase().trim() === authorName.toLowerCase().trim()
-  ) || authorList?.[0];
+  let lookup = LOOKUP_TABLE.find((r) => r.type === type && r.db === selectedDb);
+  if (!lookup) {
+    lookup = LOOKUP_TABLE.find((r) => r.type === type);
+  }
+  if (!lookup) {
+    lookup = {
+      code: "2.1.8",
+      hours: 150,
+      quality: 1,
+      faculty: 10000,
+      facultyNote: "ไม่เกิน 10,000 บาท (จ่ายตามจริง)",
+      uni: 40000
+    };
+  }
+
+  const matchedAuthor = findAuthorRowForUserBackend(authorList, { authorName, userEmail, userFullName, name_th, name_en, authorRole: author });
 
   const userProportion = Number(matchedAuthor?.proportion ?? proportion ?? 0);
   const actualHours = Math.round((userProportion * lookup.hours) / 100 * 100) / 100;
   const dateInfo = computeDateInfo(publicationDate || date);
-  const faculty = calculateFacultyFunding(type, matchedAuthor?.role || author, lookup.faculty);
-  res.json({ success: true, data: { ...lookup, faculty, actualHours, dateInfo } });
+  const effectiveRole = matchedAuthor?.role || author || "First author";
+  const faculty = calculateFacultyFunding(type, effectiveRole, lookup.faculty);
+
+  res.json({ 
+    success: true, 
+    data: { 
+      ...lookup, 
+      faculty, 
+      actualHours, 
+      dateInfo, 
+      effectiveRole, 
+      userProportion,
+      matchedAuthorName: matchedAuthor?.name || authorName || ""
+    } 
+  });
 });
 
 // 1.2 API ดึงรายการภาระงานทั้งหมด
