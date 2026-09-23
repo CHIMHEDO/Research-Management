@@ -2471,21 +2471,115 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                     </div>
 
                     {/* Bottom Highlighted Metric KPI Box */}
-                    <div className="card-bottom-metrics">
-                      <div className="card-stat-block">
-                        <span className="card-stat-lbl">ผู้ยื่น / สัดส่วน</span>
-                        <span className="card-stat-val" style={{ fontSize: 13 }} title={e.authorName || e.author}>
-                          {e.proportion}% ({e.author || "Author"})
-                        </span>
-                      </div>
+                    {(() => {
+                      const rawList = (Array.isArray(e.author_list) && e.author_list.length > 0)
+                        ? e.author_list
+                        : (Array.isArray(e.authorList) && e.authorList.length > 0 ? e.authorList : []);
 
-                      <div className="card-stat-block">
-                        <span className="card-stat-lbl">ภาระงานจริง</span>
-                        <span className="card-stat-val">
-                          {e.actualHours} <span style={{ fontSize: 11, fontWeight: 500 }}>ชม.</span>
-                        </span>
-                      </div>
-                    </div>
+                      let resolvedAuthors = rawList;
+                      if (resolvedAuthors.length === 0) {
+                        if (e.authors) {
+                          const names = e.authors.split(',').map(s => s.trim()).filter(Boolean);
+                          resolvedAuthors = names.map((name, idx) => ({
+                            name,
+                            role: idx === 0 ? (e.author || "First author") : "Co author",
+                            proportion: idx === 0 ? (e.proportion || 100) : 0
+                          }));
+                        } else {
+                          resolvedAuthors = [{
+                            name: e.authorName || user?.name_th || user?.full_name || "ผู้จัดทำ",
+                            role: e.author || "First author",
+                            proportion: e.proportion !== undefined ? e.proportion : 100
+                          }];
+                        }
+                      }
+
+                      const matchedUserRow = findAuthorRowForUser(resolvedAuthors, user, e.authorName, staffList);
+
+                      return (
+                        <div className="card-bottom-metrics">
+                          {/* Left: Author List & Proportion of All Authors */}
+                          <div className="card-authors-proportions-block" style={{ textAlign: "left" }}>
+                            <div className="card-stat-lbl" style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                              <Users size={15} color="#6d28d9" />
+                              <span>ผู้แต่งและสัดส่วนทุกคน ({resolvedAuthors.length} ท่าน)</span>
+                            </div>
+
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                              {resolvedAuthors.map((authorItem, idx) => {
+                                const isUserRow = Boolean(
+                                  matchedUserRow && 
+                                  matchedUserRow.matchIndex === idx && 
+                                  matchedUserRow.isUserMatched
+                                );
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      padding: "6px 12px",
+                                      borderRadius: "10px",
+                                      backgroundColor: isUserRow ? "#f5f3ff" : "#ffffff",
+                                      border: isUserRow ? "1.5px solid #a855f7" : "1px solid #e2e8f0",
+                                      boxShadow: isUserRow ? "0 2px 8px rgba(168, 85, 247, 0.18)" : "0 1px 2px rgba(0,0,0,0.03)",
+                                      fontSize: "13px"
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: isUserRow ? "700" : "600", color: isUserRow ? "#581c87" : "#1e293b" }}>
+                                      {idx + 1}. {authorItem.name || "ผู้แต่ง"}
+                                    </span>
+                                    {authorItem.role && (
+                                      <span style={{ fontSize: "11px", color: "#64748b" }}>
+                                        ({authorItem.role})
+                                      </span>
+                                    )}
+                                    <span
+                                      style={{
+                                        fontWeight: "800",
+                                        fontSize: "12px",
+                                        color: "#6d28d9",
+                                        backgroundColor: isUserRow ? "#ede9fe" : "#f8fafc",
+                                        padding: "2px 8px",
+                                        borderRadius: "6px",
+                                        border: isUserRow ? "1px solid #c4b5fd" : "1px solid #e2e8f0"
+                                      }}
+                                    >
+                                      {authorItem.proportion !== undefined && authorItem.proportion !== "" ? authorItem.proportion : 0}%
+                                    </span>
+                                    {isUserRow && (
+                                      <span style={{
+                                        fontSize: "10px",
+                                        fontWeight: "700",
+                                        backgroundColor: "#7c3aed",
+                                        color: "#ffffff",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px"
+                                      }}>
+                                        คุณ
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          {/* Right: Actual Workload Hours of Current User */}
+                          <div className="card-stat-block" style={{ textAlign: "center" }}>
+                            <span className="card-stat-lbl">ภาระงานจริงของคุณ</span>
+                            <span className="card-stat-val" style={{ fontSize: "22px" }}>
+                              {e.actualHours} <span style={{ fontSize: "13px", fontWeight: "600" }}>ชม.</span>
+                            </span>
+                            <span style={{ fontSize: "11px", color: "#6d28d9", fontWeight: "700", marginTop: "2px" }}>
+                              เกณฑ์ {e.code || "-"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>

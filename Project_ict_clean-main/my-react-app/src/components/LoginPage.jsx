@@ -76,7 +76,7 @@ export default function LoginPage() {
 
         <h1 className="login-title">เข้าสู่ระบบ</h1>
         <p className="login-description">
-          กรุณากรอกอีเมลมหาวิทยาลัยพะเยา (<b>@up.ac.th</b>) และรหัสผ่านเพื่อเข้าใช้งาน
+          กรุณากรอกอีเมลมหาวิทยาลัยพะเยา <b>@up.ac.th</b> และรหัสผ่านเพื่อเข้าใช้งาน
         </p>
 
         {displayedError && (
@@ -90,7 +90,7 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="login-form">
           <div className="login-input-group">
             <label className="login-label">
-              อีเมลมหาวิทยาลัย (@up.ac.th)
+              อีเมลมหาวิทยาลัย @up.ac.th
             </label>
             <div className="login-input-wrapper">
               <Mail size={18} className="login-input-icon" />
