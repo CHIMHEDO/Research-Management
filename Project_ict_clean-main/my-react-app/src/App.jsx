@@ -1806,6 +1806,18 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                 </select>
               </div>
 
+              {/* Main Submit Button at the bottom of the form */}
+              <div style={{ marginTop: "24px", paddingTop: "18px", borderTop: "1px solid #f1f5f9" }}>
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  className="btn-form-bottom-save"
+                >
+                  <Plus size={20} />
+                  <span>{form.id ? "บันทึกการแก้ไขผลงาน" : "บันทึกผลงานลงระบบ"}</span>
+                </button>
+              </div>
+
               </div>
 
             {/* Right Column: Sticky Royal Purple Hero Calculation Card */}
@@ -1898,17 +1910,6 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                       <span className="purple-calendar-chip">{previewData.dateInfo.fiscalLabel}</span>
                     </div>
                   )}
-
-                  {/* Big Action Button (Sticky Preview Card) */}
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    className="btn-purple-save"
-                    style={{ marginTop: "14px" }}
-                  >
-                    <Plus size={18} />
-                    <span>{form.id ? "บันทึกการแก้ไขผลงาน" : "บันทึกผลงานลงระบบ"}</span>
-                  </button>
                 </>
               )}
             </div>
