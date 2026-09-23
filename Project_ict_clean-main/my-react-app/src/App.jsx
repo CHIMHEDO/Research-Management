@@ -2507,7 +2507,7 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
 
                             <div style={{
                               overflowX: "auto",
-                              borderRadius: "12px",
+                              borderRadius: "10px",
                               border: "1px solid #e2e8f0",
                               background: "#ffffff",
                               boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
@@ -2515,15 +2515,15 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                               <table style={{
                                 width: "100%",
                                 borderCollapse: "collapse",
-                                fontSize: "13px",
+                                fontSize: "12px",
                                 textAlign: "left"
                               }}>
                                 <thead>
                                   <tr style={{ background: "#f8fafc", borderBottom: "1.5px solid #e2e8f0", color: "#475569" }}>
-                                    <th style={{ padding: "8px 12px", width: "45px", fontWeight: 700 }}>#</th>
-                                    <th style={{ padding: "8px 12px", fontWeight: 700 }}>ชื่อผู้แต่ง</th>
-                                    <th style={{ padding: "8px 12px", fontWeight: 700 }}>บทบาท</th>
-                                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, width: "110px" }}>สัดส่วน (%)</th>
+                                    <th style={{ padding: "5px 8px", width: "35px", fontWeight: 700 }}>#</th>
+                                    <th style={{ padding: "5px 8px", fontWeight: 700 }}>ชื่อผู้แต่ง</th>
+                                    <th style={{ padding: "5px 8px", fontWeight: 700 }}>บทบาท</th>
+                                    <th style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, width: "95px" }}>สัดส่วน (%)</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -2542,22 +2542,22 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                                           backgroundColor: isUserRow ? "#faf5ff" : (idx % 2 === 0 ? "#ffffff" : "#fcfcfd")
                                         }}
                                       >
-                                        <td style={{ padding: "8px 12px", color: "#94a3b8", fontWeight: 600 }}>
+                                        <td style={{ padding: "5px 8px", color: "#94a3b8", fontWeight: 600 }}>
                                           {idx + 1}
                                         </td>
-                                        <td style={{ padding: "8px 12px" }}>
+                                        <td style={{ padding: "5px 8px" }}>
                                           <span style={{ fontWeight: isUserRow ? 700 : 600, color: isUserRow ? "#581c87" : "#1e293b" }}>
                                             {authorItem.name || "ผู้แต่ง"}
                                           </span>
                                           {isUserRow && (
                                             <span style={{
-                                              marginLeft: "8px",
-                                              fontSize: "10px",
+                                              marginLeft: "6px",
+                                              fontSize: "9px",
                                               fontWeight: 700,
                                               backgroundColor: "#7c3aed",
                                               color: "#ffffff",
-                                              padding: "2px 7px",
-                                              borderRadius: "10px",
+                                              padding: "1px 6px",
+                                              borderRadius: "8px",
                                               display: "inline-flex",
                                               alignItems: "center"
                                             }}>
@@ -2565,12 +2565,12 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                                             </span>
                                           )}
                                         </td>
-                                        <td style={{ padding: "8px 12px" }}>
+                                        <td style={{ padding: "5px 8px" }}>
                                           <span style={{
-                                            fontSize: "11px",
+                                            fontSize: "10.5px",
                                             fontWeight: 600,
-                                            padding: "3px 8px",
-                                            borderRadius: "6px",
+                                            padding: "2px 6px",
+                                            borderRadius: "5px",
                                             backgroundColor: authorItem.role === "First author" ? "#fef3c7" : (authorItem.role === "Corresponding author" ? "#ecfdf5" : "#f1f5f9"),
                                             color: authorItem.role === "First author" ? "#b45309" : (authorItem.role === "Corresponding author" ? "#047857" : "#475569"),
                                             border: authorItem.role === "First author" ? "1px solid #fde68a" : (authorItem.role === "Corresponding author" ? "1px solid #a7f3d0" : "1px solid #e2e8f0")
@@ -2578,14 +2578,14 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                                             {authorItem.role || "Co author"}
                                           </span>
                                         </td>
-                                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                                        <td style={{ padding: "5px 8px", textAlign: "right" }}>
                                           <span style={{
                                             fontWeight: 800,
-                                            fontSize: "13px",
+                                            fontSize: "12px",
                                             color: "#6d28d9",
                                             backgroundColor: isUserRow ? "#ede9fe" : "#f8fafc",
-                                            padding: "3px 8px",
-                                            borderRadius: "6px",
+                                            padding: "2px 6px",
+                                            borderRadius: "5px",
                                             border: isUserRow ? "1px solid #c4b5fd" : "1px solid #e2e8f0"
                                           }}>
                                             {authorItem.proportion !== undefined && authorItem.proportion !== "" ? authorItem.proportion : 0}%
@@ -2602,10 +2602,10 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                           {/* Right: Actual Workload Hours of Current User */}
                           <div className="card-stat-block" style={{ textAlign: "center" }}>
                             <span className="card-stat-lbl">ภาระงานจริงของคุณ</span>
-                            <span className="card-stat-val" style={{ fontSize: "24px" }}>
-                              {e.actualHours} <span style={{ fontSize: "14px", fontWeight: "600" }}>ชม.</span>
+                            <span className="card-stat-val" style={{ fontSize: "20px" }}>
+                              {e.actualHours} <span style={{ fontSize: "13px", fontWeight: "600" }}>ชม.</span>
                             </span>
-                            <span style={{ fontSize: "12px", color: "#6d28d9", fontWeight: "700", marginTop: "4px" }}>
+                            <span style={{ fontSize: "11px", color: "#6d28d9", fontWeight: "700", marginTop: "2px" }}>
                               เกณฑ์ {e.code || "-"}
                             </span>
                           </div>
