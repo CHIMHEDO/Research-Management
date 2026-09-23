@@ -106,6 +106,10 @@ export function AuthProvider({ children }) {
         const roleLabel = data.user.role === 'admin' ? 'ผู้ดูแลระบบ (Admin)' : 'อาจารย์';
         setToast(`ยินดีต้อนรับ ${roleLabel}: ${data.user.full_name || data.user.name_th || data.user.name_en}`);
         setIsLoggingIn(false);
+        // รีเฟรชหน้าเว็บ 1 ครั้งเพื่อเคลียร์ state และโหลดข้อมูลใหม่หมดสำหรับผู้ใช้ที่เข้าสู่ระบบ
+        setTimeout(() => {
+          window.location.reload();
+        }, 150);
         return true;
       } else {
         setAuthError(data.message || "อีเมลหรือรหัสผ่านไม่ถูกต้อง");
@@ -131,6 +135,9 @@ export function AuthProvider({ children }) {
         localStorage.setItem("user_email", cleanEmail);
         setUser(data.user);
         setToast(`สลับบัญชีผู้ใช้เป็น: ${data.user.full_name || data.user.name_th || data.user.name_en}`);
+        setTimeout(() => {
+          window.location.reload();
+        }, 150);
         return true;
       }
     } catch (err) {
@@ -145,6 +152,9 @@ export function AuthProvider({ children }) {
     localStorage.removeItem("user_email");
     setUser(null);
     setToast("ออกจากระบบเรียบร้อยแล้ว");
+    setTimeout(() => {
+      window.location.reload();
+    }, 100);
   };
 
   // ซ่อน Toast อัตโนมัติหลัง 2.6 วินาที

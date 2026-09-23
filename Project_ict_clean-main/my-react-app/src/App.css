@@ -1086,8 +1086,8 @@
   border-radius: 16px;
   padding: 16px 18px;
   display: grid;
-  grid-template-columns: 1fr 1fr 1.3fr;
-  gap: 10px;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
   text-align: center;
   margin-top: auto;
 }

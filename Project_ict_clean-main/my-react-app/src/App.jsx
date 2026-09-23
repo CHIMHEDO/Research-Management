@@ -2379,13 +2379,6 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                           {e.actualHours} <span style={{ fontSize: 11, fontWeight: 500 }}>ชม.</span>
                         </span>
                       </div>
-
-                      <div className="card-stat-block">
-                        <span className="card-stat-lbl">เงินสนับสนุน</span>
-                        <span className="card-stat-val green">
-                          {((e.faculty || 0) + (e.uni || 0)) > 0 ? `${((e.faculty || 0) + (e.uni || 0)).toLocaleString()} ฿` : "-"}
-                        </span>
-                      </div>
                     </div>
                   </div>
                 ))}
@@ -2402,7 +2395,6 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                       <th>ผู้ยื่นขอประเมิน</th>
                       <th>สัดส่วน</th>
                       <th>ชั่วโมงจริง</th>
-                      <th>งบสนับสนุน</th>
                       <th style={{ textAlign: "center" }}>จัดการ</th>
                     </tr>
                   </thead>
@@ -2447,11 +2439,6 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                         <td><b>{e.proportion}%</b></td>
                         <td>
                           <span style={{ fontWeight: 700, color: "#6C2BD9" }}>{e.actualHours} ชม.</span>
-                        </td>
-                        <td>
-                          <span style={{ fontWeight: 600, color: "#059669" }}>
-                            {((e.faculty || 0) + (e.uni || 0)) > 0 ? `${((e.faculty || 0) + (e.uni || 0)).toLocaleString()} ฿` : "-"}
-                          </span>
                         </td>
                         <td style={{ textAlign: "center" }}>
                           <div style={{ display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
