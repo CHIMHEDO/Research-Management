@@ -2498,82 +2498,114 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
 
                       return (
                         <div className="card-bottom-metrics">
-                          {/* Left: Author List & Proportion of All Authors */}
+                          {/* Left: Author List & Proportion of All Authors in a Clean Table */}
                           <div className="card-authors-proportions-block" style={{ textAlign: "left" }}>
-                            <div className="card-stat-lbl" style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                            <div className="card-stat-lbl" style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
                               <Users size={15} color="#6d28d9" />
-                              <span>ผู้แต่งและสัดส่วนทุกคน ({resolvedAuthors.length} ท่าน)</span>
+                              <span>ตารางผู้แต่งและสัดส่วนทุกคน ({resolvedAuthors.length} ท่าน)</span>
                             </div>
 
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                              {resolvedAuthors.map((authorItem, idx) => {
-                                const isUserRow = Boolean(
-                                  matchedUserRow && 
-                                  matchedUserRow.matchIndex === idx && 
-                                  matchedUserRow.isUserMatched
-                                );
+                            <div style={{
+                              overflowX: "auto",
+                              borderRadius: "12px",
+                              border: "1px solid #e2e8f0",
+                              background: "#ffffff",
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.02)"
+                            }}>
+                              <table style={{
+                                width: "100%",
+                                borderCollapse: "collapse",
+                                fontSize: "13px",
+                                textAlign: "left"
+                              }}>
+                                <thead>
+                                  <tr style={{ background: "#f8fafc", borderBottom: "1.5px solid #e2e8f0", color: "#475569" }}>
+                                    <th style={{ padding: "8px 12px", width: "45px", fontWeight: 700 }}>#</th>
+                                    <th style={{ padding: "8px 12px", fontWeight: 700 }}>ชื่อผู้แต่ง</th>
+                                    <th style={{ padding: "8px 12px", fontWeight: 700 }}>บทบาท</th>
+                                    <th style={{ padding: "8px 12px", textAlign: "right", fontWeight: 700, width: "110px" }}>สัดส่วน (%)</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {resolvedAuthors.map((authorItem, idx) => {
+                                    const isUserRow = Boolean(
+                                      matchedUserRow && 
+                                      matchedUserRow.matchIndex === idx && 
+                                      matchedUserRow.isUserMatched
+                                    );
 
-                                return (
-                                  <div
-                                    key={idx}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: "6px",
-                                      padding: "6px 12px",
-                                      borderRadius: "10px",
-                                      backgroundColor: isUserRow ? "#f5f3ff" : "#ffffff",
-                                      border: isUserRow ? "1.5px solid #a855f7" : "1px solid #e2e8f0",
-                                      boxShadow: isUserRow ? "0 2px 8px rgba(168, 85, 247, 0.18)" : "0 1px 2px rgba(0,0,0,0.03)",
-                                      fontSize: "13px"
-                                    }}
-                                  >
-                                    <span style={{ fontWeight: isUserRow ? "700" : "600", color: isUserRow ? "#581c87" : "#1e293b" }}>
-                                      {idx + 1}. {authorItem.name || "ผู้แต่ง"}
-                                    </span>
-                                    {authorItem.role && (
-                                      <span style={{ fontSize: "11px", color: "#64748b" }}>
-                                        ({authorItem.role})
-                                      </span>
-                                    )}
-                                    <span
-                                      style={{
-                                        fontWeight: "800",
-                                        fontSize: "12px",
-                                        color: "#6d28d9",
-                                        backgroundColor: isUserRow ? "#ede9fe" : "#f8fafc",
-                                        padding: "2px 8px",
-                                        borderRadius: "6px",
-                                        border: isUserRow ? "1px solid #c4b5fd" : "1px solid #e2e8f0"
-                                      }}
-                                    >
-                                      {authorItem.proportion !== undefined && authorItem.proportion !== "" ? authorItem.proportion : 0}%
-                                    </span>
-                                    {isUserRow && (
-                                      <span style={{
-                                        fontSize: "10px",
-                                        fontWeight: "700",
-                                        backgroundColor: "#7c3aed",
-                                        color: "#ffffff",
-                                        padding: "2px 6px",
-                                        borderRadius: "4px"
-                                      }}>
-                                        คุณ
-                                      </span>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                                    return (
+                                      <tr
+                                        key={idx}
+                                        style={{
+                                          borderBottom: idx < resolvedAuthors.length - 1 ? "1px solid #f1f5f9" : "none",
+                                          backgroundColor: isUserRow ? "#faf5ff" : (idx % 2 === 0 ? "#ffffff" : "#fcfcfd")
+                                        }}
+                                      >
+                                        <td style={{ padding: "8px 12px", color: "#94a3b8", fontWeight: 600 }}>
+                                          {idx + 1}
+                                        </td>
+                                        <td style={{ padding: "8px 12px" }}>
+                                          <span style={{ fontWeight: isUserRow ? 700 : 600, color: isUserRow ? "#581c87" : "#1e293b" }}>
+                                            {authorItem.name || "ผู้แต่ง"}
+                                          </span>
+                                          {isUserRow && (
+                                            <span style={{
+                                              marginLeft: "8px",
+                                              fontSize: "10px",
+                                              fontWeight: 700,
+                                              backgroundColor: "#7c3aed",
+                                              color: "#ffffff",
+                                              padding: "2px 7px",
+                                              borderRadius: "10px",
+                                              display: "inline-flex",
+                                              alignItems: "center"
+                                            }}>
+                                              👤 คุณ
+                                            </span>
+                                          )}
+                                        </td>
+                                        <td style={{ padding: "8px 12px" }}>
+                                          <span style={{
+                                            fontSize: "11px",
+                                            fontWeight: 600,
+                                            padding: "3px 8px",
+                                            borderRadius: "6px",
+                                            backgroundColor: authorItem.role === "First author" ? "#fef3c7" : (authorItem.role === "Corresponding author" ? "#ecfdf5" : "#f1f5f9"),
+                                            color: authorItem.role === "First author" ? "#b45309" : (authorItem.role === "Corresponding author" ? "#047857" : "#475569"),
+                                            border: authorItem.role === "First author" ? "1px solid #fde68a" : (authorItem.role === "Corresponding author" ? "1px solid #a7f3d0" : "1px solid #e2e8f0")
+                                          }}>
+                                            {authorItem.role || "Co author"}
+                                          </span>
+                                        </td>
+                                        <td style={{ padding: "8px 12px", textAlign: "right" }}>
+                                          <span style={{
+                                            fontWeight: 800,
+                                            fontSize: "13px",
+                                            color: "#6d28d9",
+                                            backgroundColor: isUserRow ? "#ede9fe" : "#f8fafc",
+                                            padding: "3px 8px",
+                                            borderRadius: "6px",
+                                            border: isUserRow ? "1px solid #c4b5fd" : "1px solid #e2e8f0"
+                                          }}>
+                                            {authorItem.proportion !== undefined && authorItem.proportion !== "" ? authorItem.proportion : 0}%
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
                             </div>
                           </div>
 
                           {/* Right: Actual Workload Hours of Current User */}
                           <div className="card-stat-block" style={{ textAlign: "center" }}>
                             <span className="card-stat-lbl">ภาระงานจริงของคุณ</span>
-                            <span className="card-stat-val" style={{ fontSize: "22px" }}>
-                              {e.actualHours} <span style={{ fontSize: "13px", fontWeight: "600" }}>ชม.</span>
+                            <span className="card-stat-val" style={{ fontSize: "24px" }}>
+                              {e.actualHours} <span style={{ fontSize: "14px", fontWeight: "600" }}>ชม.</span>
                             </span>
-                            <span style={{ fontSize: "11px", color: "#6d28d9", fontWeight: "700", marginTop: "2px" }}>
+                            <span style={{ fontSize: "12px", color: "#6d28d9", fontWeight: "700", marginTop: "4px" }}>
                               เกณฑ์ {e.code || "-"}
                             </span>
                           </div>
