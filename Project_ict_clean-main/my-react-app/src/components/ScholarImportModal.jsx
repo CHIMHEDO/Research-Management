@@ -40,16 +40,54 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   const [scopusFetchingDetail, setScopusFetchingDetail] = useState(false);
   const [selectedScopusPaper, setSelectedScopusPaper] = useState(null);
 
-  // ดึงรายชื่ออาจารย์ทั้งหมดและล็อคให้เป็นผู้ใช้ที่ล็อกอินอยู่เท่านั้น
+  const isAdmin = user?.role === 'admin';
+
+  // ดึงรายชื่ออาจารย์ทั้งหมดและล็อคให้เป็นผู้ใช้ที่ล็อกอินอยู่เท่านั้น (ยกเว้น admin)
   useEffect(() => {
     if (!isOpen) return;
     api.get('/users')
       .then(res => {
-        setUsers(res.data);
-        setAuthorsList(res.data);
-        if (user) {
-          const matched = res.data.find(u => u.id === user.id || u.email === user.email);
-          setSelectedUserId(matched ? matched.id : (user.id || res.data[0]?.id || null));
+        const rawUsers = res.data || [];
+        const isUserAdmin = user?.role === 'admin';
+
+        if (!isUserAdmin && user) {
+          const userEmail = (user.email || '').toLowerCase().trim();
+          const userNameTh = (user.name_th || '').trim();
+          const userNameEn = (user.name_en || '').trim();
+          const userFullName = (user.full_name || '').trim();
+
+          const myUser = rawUsers.find(u =>
+            (user.id && u.id === user.id) ||
+            (userEmail && u.email && u.email.toLowerCase().trim() === userEmail) ||
+            (userNameTh && u.name_th && u.name_th.includes(userNameTh)) ||
+            (userNameEn && u.name_en && u.name_en.includes(userNameEn)) ||
+            (userFullName && u.full_name && u.full_name.includes(userFullName))
+          );
+
+          const effectiveUser = myUser || {
+            id: user.id || 1,
+            name_th: user.name_th || user.full_name || '',
+            name_en: user.name_en || '',
+            full_name: user.full_name || user.name_th || user.name_en || '',
+            email: user.email || '',
+            department: user.department || 'ICT',
+            scopus_id: user.scopus_id || null,
+            scholar_id: user.scholar_id || null
+          };
+
+          setUsers([effectiveUser]);
+          setAuthorsList([effectiveUser]);
+          setSelectedUserId(effectiveUser.id);
+          setSelectedAuthorId(String(effectiveUser.id));
+        } else {
+          setUsers(rawUsers);
+          setAuthorsList(rawUsers);
+          if (user) {
+            const matched = rawUsers.find(u => u.id === user.id || u.email === user.email);
+            const targetId = matched ? matched.id : (user.id || rawUsers[0]?.id || null);
+            setSelectedUserId(targetId);
+            setSelectedAuthorId(targetId ? String(targetId) : '');
+          }
         }
       })
       .catch(err => console.error('Fetch users error:', err));
@@ -340,7 +378,28 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                     </label>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <div style={{ flex: 1, minWidth: '200px' }}>
-                        {renderGroupedSelect(authorsList, selectedAuthorId, setSelectedAuthorId, true, false)}
+                        {isAdmin ? (
+                          renderGroupedSelect(authorsList, selectedAuthorId, setSelectedAuthorId, true, false)
+                        ) : (
+                          <div style={{
+                            padding: '10px 14px',
+                            background: '#ffffff',
+                            border: '1px solid #d1d5db',
+                            borderRadius: '8px',
+                            fontSize: '14px',
+                            fontWeight: '600',
+                            color: '#1e293b',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px'
+                          }}>
+                            <UserCheck size={16} color="#7c3aed" />
+                            <span>{currentUserObj?.name_th || currentUserObj?.name_en || currentUserObj?.full_name || user?.full_name || user?.name_th || user?.name_en || user?.email}</span>
+                            <span style={{ fontSize: '11px', fontWeight: 'normal', background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: '6px' }}>
+                              {currentUserObj?.department || user?.department || 'ICT'}
+                            </span>
+                          </div>
+                        )}
                       </div>
                       
                       <button 
@@ -471,40 +530,44 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
           {/* ═══ GOOGLE SCHOLAR TAB ═══ */}
           {scopusTab === 'google' ? <div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
               <span style={{ fontSize: '13px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>
                 อาจารย์ผู้จัดทำ:
               </span>
-              <select
-                className="form-control"
-                style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', width: '100%' }}
-                value={selectedUserId || ''}
-                onChange={(e) => setSelectedUserId(Number(e.target.value))}
-              >
-                {users.map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.name_th || u.name_en || u.full_name} ({u.department || 'ICT'})
-                  </option>
-                ))}
-              </select>
-              <div style={{
-                padding: '6px 14px',
-                background: '#f8fafc',
-                border: '1px solid #cbd5e1',
-                borderRadius: '8px',
-                fontSize: '13px',
-                fontWeight: '600',
-                color: '#1e293b',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}>
-                <UserCheck size={16} color="#7c3aed" />
-                <span>{currentUserObj?.name_th || currentUserObj?.name_en || currentUserObj?.full_name || user?.full_name || user?.name_th || user?.name_en || user?.email}</span>
-                <span style={{ fontSize: '11px', color: '#64748b', fontWeight: 'normal', background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: '6px' }}>
-                  {currentUserObj?.department || user?.department || 'ICT'}
-                </span>
-              </div>
+              {isAdmin ? (
+                <select
+                  className="form-control"
+                  style={{ fontSize: '13px', padding: '6px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', width: '100%' }}
+                  value={selectedUserId || ''}
+                  onChange={(e) => setSelectedUserId(Number(e.target.value))}
+                >
+                  {users.map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.name_th || u.name_en || u.full_name} ({u.department || 'ICT'})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div style={{
+                  padding: '6px 14px',
+                  background: '#f8fafc',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: '8px',
+                  fontSize: '13px',
+                  fontWeight: '600',
+                  color: '#1e293b',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  width: '100%'
+                }}>
+                  <UserCheck size={16} color="#7c3aed" />
+                  <span>{currentUserObj?.name_th || currentUserObj?.name_en || currentUserObj?.full_name || user?.full_name || user?.name_th || user?.name_en || user?.email}</span>
+                  <span style={{ fontSize: '11px', fontWeight: 'normal', background: '#ede9fe', color: '#6d28d9', padding: '2px 8px', borderRadius: '6px' }}>
+                    {currentUserObj?.department || user?.department || 'ICT'}
+                  </span>
+                </div>
+              )}
             </div>
 
             <button
