@@ -22,7 +22,8 @@ import {
   Calendar,
   GraduationCap,
   BarChart3,
-  Mail
+  Mail,
+  AlertTriangle
 } from "lucide-react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import LoginPage from "./components/LoginPage";
@@ -134,6 +135,51 @@ const [staffList, setStaffList] = useState([]);
   const authorValidation = useMemo(() => {
     return validateAuthorProportions(form.authorList || []);
   }, [form.authorList]);
+
+  // สถานะยืนยันผลงานซ้ำซ้อน
+  const [duplicateConfirmed, setDuplicateConfirmed] = useState(false);
+
+  // ตรวจจับผลงานที่ซ้ำซ้อนในฐานข้อมูล (Duplicate Detection)
+  const duplicateWarning = useMemo(() => {
+    const cleanTitle = (form.title || '').trim();
+    const cleanDoi = (form.doi || '').trim().toLowerCase();
+
+    if (!cleanTitle && !cleanDoi) return null;
+
+    const matchedEntry = entries.find(item => {
+      if (form.id && item.id === form.id) return false;
+
+      const itemDoi = (item.doi || '').trim().toLowerCase();
+      if (cleanDoi && itemDoi && cleanDoi === itemDoi) {
+        return true;
+      }
+
+      const itemTitle = (item.title || '').trim();
+      if (cleanTitle && itemTitle) {
+        if (cleanTitle.toLowerCase() === itemTitle.toLowerCase()) return true;
+        if (cleanTitle.length >= 8 && itemTitle.length >= 8 && titleSimilarity(cleanTitle, itemTitle) >= 0.82) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (!matchedEntry) return null;
+
+    const isDoiMatch = cleanDoi && (matchedEntry.doi || '').trim().toLowerCase() === cleanDoi;
+    return {
+      isDuplicate: true,
+      matchedEntry,
+      reason: isDoiMatch 
+        ? `เลข DOI ตรงกับผลงานในระบบ: ${matchedEntry.doi}` 
+        : `ชื่อเรื่องตรงกันหรือคล้ายคลึงกับผลงานในระบบ: "${matchedEntry.title}"`
+    };
+  }, [form.title, form.doi, form.id, entries]);
+
+  // รีเซ็ตสถานะการยืนยันเมื่อชื่อผลงานหรือ DOI เปลี่ยน
+  useEffect(() => {
+    setDuplicateConfirmed(false);
+  }, [form.title, form.doi]);
 
   // ฟังก์ชันจัดการ authorList
   const handleAddAuthor = () => {
@@ -824,6 +870,12 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
   const handleSave = async () => {
     // 🌟 Validate authors form before saving
     if (!validateAuthorsForm()) return;
+
+    // ⚠️ ตรวจสอบกรณีตรวจพบผลงานซ้ำซ้อนในระบบ แต่ยังไม่ได้กดยืนยัน
+    if (duplicateWarning && duplicateWarning.isDuplicate && !duplicateConfirmed) {
+      setToast("⚠️ ตรวจพบผลงานที่อาจซ้ำซ้อนในระบบ กรุณาตรวจสอบและกดยืนยันในการ์ดสรุปภาระงานก่อนบันทึก");
+      return;
+    }
 
     const activePreview = previewData || computeClientCalculation(form, user, staffList);
     const entryId = form.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1908,6 +1960,59 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                       <span className="purple-calendar-chip">{previewData.dateInfo.beLabel}</span>
                       <span className="purple-calendar-chip">{previewData.dateInfo.acadLabel}</span>
                       <span className="purple-calendar-chip">{previewData.dateInfo.fiscalLabel}</span>
+                    </div>
+                  )}
+
+                  {/* Duplicate Detection Alert Box at bottom of Purple Preview Card */}
+                  {duplicateWarning && duplicateWarning.isDuplicate && (
+                    <div style={{
+                      marginTop: "16px",
+                      padding: "14px 16px",
+                      borderRadius: "14px",
+                      background: duplicateConfirmed 
+                        ? "linear-gradient(135deg, rgba(16, 185, 129, 0.25) 0%, rgba(5, 150, 105, 0.3) 100%)" 
+                        : "linear-gradient(135deg, rgba(245, 158, 11, 0.28) 0%, rgba(217, 119, 6, 0.35) 100%)",
+                      border: duplicateConfirmed ? "1.5px solid #34d399" : "1.5px solid #fbbf24",
+                      color: "#ffffff",
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                      animation: "fadeIn 0.3s ease"
+                    }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                        <AlertTriangle size={20} color={duplicateConfirmed ? "#34d399" : "#fde047"} style={{ flexShrink: 0, marginTop: "2px" }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: "13px", fontWeight: "800", color: duplicateConfirmed ? "#6ee7b7" : "#fef08a", marginBottom: "4px" }}>
+                            {duplicateConfirmed ? "✓ ยืนยันผลงานแล้ว (พร้อมบันทึก)" : "⚠️ ตรวจพบผลงานซ้ำในระบบ"}
+                          </div>
+                          <div style={{ fontSize: "11px", lineHeight: "1.5", color: "#f3e8ff", marginBottom: "8px" }}>
+                            {duplicateWarning.reason}
+                            <div style={{ marginTop: "4px", color: "#fef08a", fontSize: "11px" }}>
+                              • ผู้ยื่นเดิม: <b>{duplicateWarning.matchedEntry.authorName || duplicateWarning.matchedEntry.author || "ไม่ระบุ"}</b>
+                            </div>
+                          </div>
+                          
+                          <label style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            fontSize: "12px",
+                            fontWeight: "700",
+                            color: duplicateConfirmed ? "#a7f3d0" : "#ffffff",
+                            cursor: "pointer",
+                            background: "rgba(0, 0, 0, 0.25)",
+                            padding: "8px 10px",
+                            borderRadius: "8px",
+                            userSelect: "none"
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={duplicateConfirmed}
+                              onChange={(e) => setDuplicateConfirmed(e.target.checked)}
+                              style={{ width: "16px", height: "16px", accentColor: "#10b981", cursor: "pointer" }}
+                            />
+                            <span>ยืนยันว่าไม่ใช่ผลงานซ้ำซ้อน / ต้องการบันทึก</span>
+                          </label>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </>
