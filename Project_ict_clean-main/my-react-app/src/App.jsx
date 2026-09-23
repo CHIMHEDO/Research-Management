@@ -116,7 +116,27 @@ const emptyForm = {
 function AcademicWorkloadMain() {
   const { user, authLoading, token, toast, setToast } = useAuth();
 
-  const [tab, setTab] = useState("form");
+  const [tab, setTabState] = useState(() => {
+    return sessionStorage.getItem("active_tab") || "form";
+  });
+
+  const setTab = (newTab) => {
+    sessionStorage.setItem("active_tab", newTab);
+    setTabState(newTab);
+  };
+
+  // จัดการการเปลี่ยน Tab / เมนู Sidebar พร้อมป้องกัน Error กรณีอยู่ระหว่างปรับแต่งผลงานแล้วไม่กดบันทึก
+  const handleTabChange = (newTab) => {
+    // กรณีป้องกันการ error ถ้าหากผู้ใช้ กดปรับแต่ง ผลงานจากหน้าแดชบอร์ดแล้วเมื่อถูกส่งมาหน้าผลงานวิชาการ(คำนวณ)
+    // แต่ผู้ใช้ไม่กดบันทึกแล้วกดไปยัง sidebar อื่นทันทีโดยที่ยังไม่ได้กดบันทึกผลงาน ให้รีเฟรช 1 ครั้งเพื่อกันการ error
+    if (tab === "form" && form.id && newTab !== "form") {
+      sessionStorage.setItem("active_tab", newTab);
+      window.location.reload();
+      return;
+    }
+    setTab(newTab);
+  };
+
   const [form, setForm] = useState(emptyForm);
   const [entries, setEntries] = useState([]);
 const [pdfModalOpen, setPdfModalOpen] = useState(false);
@@ -1334,11 +1354,11 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
   return (
     <div className="app-layout">
       {/* Left Sidebar Navigation */}
-      <Sidebar tab={tab} setTab={setTab} entriesCount={userEntries.length} />
+      <Sidebar tab={tab} setTab={handleTabChange} entriesCount={userEntries.length} />
 
       {/* Main Content Area */}
       <div className="app-content-wrapper">
-        <Header tab={tab} setTab={setTab} entries={userEntries} />
+        <Header tab={tab} setTab={handleTabChange} entries={userEntries} />
 
         <main className="app-main">
           {tab === "form" && (
