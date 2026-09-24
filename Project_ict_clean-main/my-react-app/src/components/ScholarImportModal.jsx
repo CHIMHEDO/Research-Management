@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import AcademicSyncLoadingModal from './AcademicSyncLoadingModal';
 
 export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   const { user } = useAuth();
@@ -528,7 +529,8 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
             )}
 
           {/* ═══ GOOGLE SCHOLAR TAB ═══ */}
-          {scopusTab === 'google' ? <div>
+          {scopusTab === 'google' ? (
+            <div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', alignItems: 'center', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
               <span style={{ fontSize: '13px', fontWeight: '600', color: '#475569', whiteSpace: 'nowrap' }}>
@@ -785,10 +787,27 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
             </div>
           )}
         </div>
-      : null} 
+      ) : null}
 
         </div> 
       </div> 
+
+      {/* 🚀 Academic Database Live Loading Modal */}
+      <AcademicSyncLoadingModal
+        isOpen={syncing || scopusLoading || fetchingDetail || scopusFetchingDetail}
+        source={
+          syncing ? 'scholar' :
+          scopusLoading ? 'scopus' :
+          (fetchingDetail || scopusFetchingDetail) ? 'detail' : 'scholar'
+        }
+        targetName={currentUserObj?.name_th || currentUserObj?.name_en || currentUserObj?.full_name || user?.full_name || ''}
+        department={currentUserObj?.department || user?.department || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร'}
+        customTitle={
+          syncing ? 'กำลังซิงก์ข้อมูลล่าสุดจาก Google Scholar' :
+          scopusLoading ? 'กำลังดึงข้อมูลบทความจาก Elsevier Scopus' :
+          (fetchingDetail || scopusFetchingDetail) ? 'กำลังดึงข้อมูลบทความฉบับเต็มและสกัด Metadata' : ''
+        }
+      />
     </div> 
   );
 }

@@ -27,6 +27,7 @@ import {
   List
 } from 'lucide-react';
 import api from '../api/client';
+import AcademicSyncLoadingModal from './AcademicSyncLoadingModal';
 
 const DEPARTMENT_ORDER = [
   'Computer Graphics and Multimedia',
@@ -808,6 +809,19 @@ const scopusPapers = useMemo(() =>
           )}
         </div>
       )}
+
+      {/* 🚀 Academic Database Live Loading Modal */}
+      <AcademicSyncLoadingModal
+        isOpen={isSyncing || isScopusSyncing}
+        source={isScopusSyncing ? 'scopus' : 'scholar'}
+        targetName={currentUser?.name_th || currentUser?.name_en || currentUser?.full_name || ''}
+        department={currentUser?.department || selectedDept || 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร'}
+        customTitle={
+          isScopusSyncing
+            ? 'กำลังดึงและซิงก์ผลงานวิจัยจาก Elsevier Scopus'
+            : 'กำลังดึงและซิงก์ผลงานวิจัยจาก Google Scholar'
+        }
+      />
     </div>
   );
 }

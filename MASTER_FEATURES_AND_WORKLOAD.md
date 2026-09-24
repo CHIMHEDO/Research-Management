@@ -219,11 +219,14 @@ C:\Research-Management-main\
 - **Google Scholar Import**: ค้นหาและดึงรายการผลงานวิจัยของอาจารย์ตามชื่อหรือ Scholar ID
 - **Scopus Import**: ค้นหาข้อมูลผลงานและ Quartile จากฐานข้อมูล Scopus
 - **AI PDF Extraction**: อัปโหลดไฟล์ PDF ผลงานวิจัย จากนั้น AI (LLM) จะสกัดชื่อเรื่อง, ผู้แต่ง, DOI, วารสาร, และวันที่ตีพิมพ์ให้อัตโนมัติ
+- **Academic Database Live Loading Screen (หน้าจอโหลดสดระหว่างดึงข้อมูล)**: หน้าจอ Loading Screen แบบ Glassmorphism Card มินิมอล แสดงตัวเลขเปอร์เซ็นต์ขนาดใหญ่ชัดเจน (Percentage-focused) พร้อมแอนิเมชัน Glowing Pulse Radar และแถบความคืบหน้าแบบ Gradient Bar ไม่แสดงข้อความขั้นตอนให้รกตา เพื่อประสบการณ์ใช้งานที่เรียบง่ายและทันสมัย
 
 ### 📂 ไฟล์และจุดที่ต้องแก้ไข/ตรวจสอบ
 | หน้าที่ | ไฟล์โค้ดที่เกี่ยวข้อง | ฟังก์ชัน / จุดสำคัญ |
 | :--- | :--- | :--- |
-| **Modal นำเข้า Scholar** | `my-react-app/src/components/ScholarImportModal.jsx` | ดึงและเลือกผลงานจาก Google Scholar |
+| **หน้าจอ Loading ระหว่างดึงข้อมูลวิชาการ** | `my-react-app/src/components/AcademicSyncLoadingModal.jsx` | โมดอล Loading Overlay แสดงสถานะเชื่อมต่อ Scholar/Scopus แบบเรียลไทม์ |
+| **Modal นำเข้า Scholar & Scopus** | `my-react-app/src/components/ScholarImportModal.jsx` | ดึงและเลือกผลงานจาก Google Scholar & Scopus พร้อมแสดง Loading Modal |
+| **Scholar Dashboard** | `my-react-app/src/components/ScholarDashboard.jsx` | แดชบอร์ดผลงานวิชาการ แสดง Loading Modal ระหว่างกดซิงก์ |
 | **Modal อัปโหลด PDF AI** | `my-react-app/src/components/PdfUploadModal.jsx` | Drag & Drop PDF, แสดงผลการสกัดข้อมูล |
 | **Scholar Scraper API** | `backend/scholarService.js` | ดึงข้อมูล Scholar Profile และ Publications |
 | **Scopus API Service** | `backend/scopusService.js` | เชื่อมต่อ Scopus Search API |
