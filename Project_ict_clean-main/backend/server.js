@@ -244,7 +244,12 @@ function formatEntry(row) {
     confirmation_days_remaining: daysRemaining,
     confirmed_by: confirmedAuthors,
     author_list: authorListMeta,
-    is_workload_counted: (confirmationStatus === "CONFIRMED" || confirmationStatus === "AUTO_CONFIRMED")
+    is_workload_counted: (confirmationStatus === "CONFIRMED" || confirmationStatus === "AUTO_CONFIRMED"),
+    workload_frozen: Boolean(dateInfo && dateInfo.workload_frozen),
+    freeze_notice: (dateInfo && dateInfo.freeze_notice) || null,
+    locked_hours: (dateInfo && dateInfo.locked_hours !== undefined) ? dateInfo.locked_hours : null,
+    locked_faculty: (dateInfo && dateInfo.locked_faculty !== undefined) ? dateInfo.locked_faculty : null,
+    locked_uni: (dateInfo && dateInfo.locked_uni !== undefined) ? dateInfo.locked_uni : null
   };
 }
 
@@ -338,7 +343,36 @@ app.post("/api/entries", async (req, res) => {
     } = req.body;
     const pubDate = publicationDate || date || null;
 
+    let isPreviouslyFinalized = false;
+    let lockedHours = null;
+    let lockedFaculty = null;
+    let lockedUni = null;
+
     if (req.body.id) {
+      const { data: existingRows } = await supabase
+        .from("entries")
+        .select("*")
+        .eq("id", req.body.id)
+        .limit(1);
+
+      if (existingRows && existingRows.length > 0) {
+        const existingEntry = existingRows[0];
+        let exParsed = {};
+        try {
+          exParsed = typeof existingEntry.date_info === "string" ? JSON.parse(existingEntry.date_info) : (existingEntry.date_info || {});
+        } catch {}
+
+        const exConf = exParsed.confirmation;
+        const exCreatedAt = existingEntry.created_at ? new Date(existingEntry.created_at).getTime() : Date.now();
+        const exDeadline = exConf?.deadline ? new Date(exConf.deadline).getTime() : (exCreatedAt + 7 * 86400000);
+        const isPast7Days = Date.now() >= exDeadline;
+        isPreviouslyFinalized = exConf?.status === 'CONFIRMED' || exConf?.status === 'AUTO_CONFIRMED' || isPast7Days || Boolean(exParsed.workload_frozen);
+
+        lockedHours = exParsed.locked_hours !== undefined ? exParsed.locked_hours : existingEntry.actual_hours;
+        lockedFaculty = exParsed.locked_faculty !== undefined ? exParsed.locked_faculty : existingEntry.faculty;
+        lockedUni = exParsed.locked_uni !== undefined ? exParsed.locked_uni : existingEntry.uni;
+      }
+
       const { error: deleteError } = await supabase.from("entries").delete().eq("id", req.body.id);
       if (deleteError) {
         console.error('[Delete Entry On Update Error]', deleteError);
@@ -383,6 +417,8 @@ app.post("/api/entries", async (req, res) => {
     const currentEditorEmail = (req.body.editorEmail || req.body.userEmail || req.body.user_email || '').toLowerCase().trim();
     const currentEditorName = (req.body.editorName || req.body.userName || req.body.userFullName || '').toLowerCase().trim();
     const currentEditorId = (req.body.editorId || req.body.userId || req.body.user_id) ? String(req.body.editorId || req.body.userId || req.body.user_id).trim() : '';
+    const requesterRole = (req.body.userRole || req.body.role || '').toLowerCase().trim();
+    const isAdmin = requesterRole === 'admin';
 
     const activeEditorIdentifiers = [currentEditorEmail, currentEditorName, currentEditorId].filter(Boolean);
     const isOnlyOneAuthor = (processedAuthorList?.length || 1) <= 1;
@@ -399,6 +435,39 @@ app.post("/api/entries", async (req, res) => {
     } else {
       // บันทึกใหม่ครั้งแรก
       existingConfirmedBy = activeEditorIdentifiers.length > 0 ? activeEditorIdentifiers : [(authorName || 'submitter').toLowerCase().trim()];
+    }
+
+    // 🔒 กฎการคำนวณภาระงานและเงินรางวัล:
+    // เมื่อผลงานยืนยันครบหรือผ่านไป 7 วันแล้ว สมาชิกทั่วไปแก้ไขผลงานได้ แต่จะไม่มีผลต่อชั่วโมงภาระงานสะสมและเงินรางวัล (คงค่าเดิมที่อนุมัติไว้)
+    // ยกเว้น Admin เป็นผู้แก้ไขเท่านั้นที่จะมีผลต่อชั่วโมงภาระงานและเงินรางวัล
+    let finalActualHours = actualHours !== undefined ? Number(actualHours) : 0;
+    let finalFaculty = faculty !== undefined ? Number(faculty) : 0;
+    let finalUni = uni !== undefined ? Number(uni) : 0;
+
+    if (isPreviouslyFinalized) {
+      if (!isAdmin) {
+        // สมาชิกทั่วไปแก้ไขหลังยืนยันแล้ว -> ล็อคยอดชั่วโมงและเงินรางวัลเดิม
+        if (lockedHours !== null && lockedHours !== undefined) finalActualHours = Number(lockedHours);
+        if (lockedFaculty !== null && lockedFaculty !== undefined) finalFaculty = Number(lockedFaculty);
+        if (lockedUni !== null && lockedUni !== undefined) finalUni = Number(lockedUni);
+
+        parsedDateInfo.workload_frozen = true;
+        parsedDateInfo.locked_hours = finalActualHours;
+        parsedDateInfo.locked_faculty = finalFaculty;
+        parsedDateInfo.locked_uni = finalUni;
+        parsedDateInfo.freeze_notice = "ผลงานได้รับการยืนยันสมบูรณ์/พ้นกำหนด 7 วันแล้ว การแก้ไขโดยสมาชิกทั่วไปไม่มีผลต่อชั่วโมงภาระงานและเงินรางวัลสะสม (คงค่าอนุมัติเดิม)";
+      } else {
+        // Admin แก้ไข -> คำนวณและอัปเดตยอดใหม่
+        parsedDateInfo.workload_frozen = false;
+        parsedDateInfo.locked_hours = finalActualHours;
+        parsedDateInfo.locked_faculty = finalFaculty;
+        parsedDateInfo.locked_uni = finalUni;
+        delete parsedDateInfo.freeze_notice;
+      }
+    } else {
+      parsedDateInfo.locked_hours = finalActualHours;
+      parsedDateInfo.locked_faculty = finalFaculty;
+      parsedDateInfo.locked_uni = finalUni;
     }
 
     // BR-03 & BR-05: ตรวจสอบว่าผู้แต่งทุกคนกดยืนยันครบแล้วจริงหรือไม่
@@ -441,10 +510,10 @@ app.post("/api/entries", async (req, res) => {
       date: pubDate, code: code || "",
       base_hours: baseHours !== undefined ? Number(baseHours) : 0,
       quality: quality !== undefined ? Number(quality) : 0,
-      actual_hours: actualHours !== undefined ? Number(actualHours) : 0,
-      faculty: faculty !== undefined ? Number(faculty) : 0,
+      actual_hours: finalActualHours,
+      faculty: finalFaculty,
       faculty_note: facultyNote || "",
-      uni: uni !== undefined ? Number(uni) : 0,
+      uni: finalUni,
       date_info: JSON.stringify(parsedDateInfo)
     };
 

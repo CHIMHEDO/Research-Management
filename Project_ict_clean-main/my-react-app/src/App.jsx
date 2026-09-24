@@ -979,6 +979,8 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
       editorName: user?.name_th || user?.name_en || user?.full_name || user?.email || "",
       userName: user?.name_th || user?.name_en || user?.full_name || "",
       userFullName: user?.name_th || user?.name_en || user?.full_name || "",
+      userRole: user?.role || 'user',
+      role: user?.role || 'user',
       authorName: resolvedAuthorName,
       author: activePreview.effectiveRole || form.author,
       proportion: activePreview.userProportion ?? form.proportion ?? 100,
@@ -2381,6 +2383,11 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                                 {e.confirmation_status === "PENDING" && (
                                   <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#fffbeb", color: "#b45309", border: "1px solid #fde68a" }} title={`รอผู้ร่วมงานยืนยันสัดส่วน (หากไม่มีการแก้ไข จะอนุมัติอัตโนมัติในอีก ${e.confirmation_days_remaining || 7} วัน)`}>
                                     ⏳ รอผู้ร่วมงานยืนยัน ({e.confirmation_days_remaining} วัน)
+                                  </span>
+                                )}
+                                {e.workload_frozen && (
+                                  <span style={{ fontSize: "11px", fontWeight: "700", padding: "2px 7px", borderRadius: "6px", background: "#f8fafc", color: "#475569", border: "1px solid #cbd5e1" }} title={e.freeze_notice || "ผลงานได้รับการยืนยันสมบูรณ์/พ้นกำหนด 7 วันแล้ว การแก้ไขโดยสมาชิกทั่วไปไม่มีผลต่อชั่วโมงภาระงานและเงินรางวัลสะสม (คงค่าอนุมัติเดิม)"}>
+                                    🔒 ภาระงานล็อคตามยอดอนุมัติเดิม
                                   </span>
                                 )}
                               </div>
