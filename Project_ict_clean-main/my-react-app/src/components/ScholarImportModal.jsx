@@ -153,10 +153,14 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
     return users.find(u => u.id === selectedUserId) || null;
   }, [users, selectedUserId]);
 
+  const [activeLoadingPaperId, setActiveLoadingPaperId] = useState(null);
+
   const handleChoose = async (paper) => {
+    console.log('[ScholarImportModal] Selected paper directly:', paper);
     if (onSelectPaper) {
       if (paper.scholar_url) {
         setFetchingDetail(true);
+        setActiveLoadingPaperId(paper.paper_id || paper.id || paper.title);
         try {
           const res = await api.post('/scholar/paper-detail', {
             detailUrl: paper.scholar_url
@@ -183,6 +187,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
           onSelectPaper(paper, currentUserObj);
         } finally {
           setFetchingDetail(false);
+          setActiveLoadingPaperId(null);
         }
       } else {
         onSelectPaper(paper, currentUserObj);
@@ -192,6 +197,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   };
 
   const handleSelectScopusPaper = async (paper) => {
+    console.log('[ScholarImportModal] Selected Scopus paper directly:', paper);
     setScopusFetchingDetail(true);
     setSelectedScopusPaper(paper);
     try {
@@ -741,7 +747,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '6px',
-                        background: fetchingDetail ? '#94a3f8' : 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+                        background: activeLoadingPaperId === (paper.paper_id || paper.id || paper.title) ? '#94a3f8' : 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
                         color: 'white',
                         border: 'none',
                         padding: '8px 14px',
@@ -757,7 +763,7 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
                       onMouseOver={(e) => { if (!fetchingDetail) e.currentTarget.style.transform = 'translateY(-1px)' }}
                       onMouseOut={(e) => { e.currentTarget.style.transform = 'translateY(0)' }}
                     >
-                      {fetchingDetail ? (
+                      {activeLoadingPaperId === (paper.paper_id || paper.id || paper.title) ? (
                         <>
                           <RefreshCw size={15} className="spin" />
                           กำลังดึงข้อมูล...

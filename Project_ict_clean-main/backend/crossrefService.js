@@ -127,7 +127,7 @@ function mapCrossref(m) {
     pages: m.page || '',
     publicationDate: y ? `${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}` : '',
     abstract: (m.abstract || '').replace(/<[^>]+>/g, '').trim(),
-    keywords: m.subject || [],
+    keywords: Array.isArray(m.subject) ? m.subject : (m.subject ? [m.subject] : []),
     authors: (m.author || []).map(a => ({
       name: [a.given, a.family].filter(Boolean).join(' '),
       affiliation: a.affiliation?.[0]?.name || '',
@@ -150,6 +150,11 @@ function mapOpenAlex(m) {
     abstract = arr.join(' ');
   }
 
+  // รวมทั้ง keywords และ concepts จาก OpenAlex
+  const kwList = (m.keywords || []).map(k => k.display_name)
+    .concat((m.concepts || []).slice(0, 8).map(c => c.display_name));
+  const uniqueKw = Array.from(new Set(kwList));
+
   return {
     title: m.display_name,
     journal: m.primary_location?.source?.display_name || m.host_venue?.display_name || '',
@@ -158,7 +163,7 @@ function mapOpenAlex(m) {
     pages: m.biblio?.first_page ? `${m.biblio.first_page}-${m.biblio.last_page || ''}` : '',
     publicationDate: m.publication_date || '',
     abstract,
-    keywords: (m.concepts || []).slice(0, 10).map(c => c.display_name),
+    keywords: uniqueKw,
     authors: (m.authorships || []).map(a => ({
       name: a.author?.display_name || '',
       affiliation: a.institutions?.[0]?.display_name || '',

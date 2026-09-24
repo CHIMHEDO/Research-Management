@@ -76,6 +76,9 @@ export const normalizeImportedPaper = (paperData = {}) => {
   const rawPublicationDate = 
     paperData.publicationDate ||
     paperData.publication_date ||
+    paperData.pub_year ||
+    paperData.publish_year ||
+    paperData.year ||
     paperData.coverDate ||
     paperData.cover_date ||
     paperData.date ||
@@ -87,18 +90,19 @@ export const normalizeImportedPaper = (paperData = {}) => {
 
   let publicationDate = '';
   if (rawPublicationDate) {
-    if (typeof rawPublicationDate === 'string' && rawPublicationDate.includes('/')) {
-      const parts = rawPublicationDate.split('/');
+    const str = String(rawPublicationDate).trim();
+    if (/^\d{4}$/.test(str)) {
+      publicationDate = `${str}-01-01`;
+    } else if (/^\d{4}-\d{2}$/.test(str)) {
+      publicationDate = `${str}-01`;
+    } else if (str.includes('/')) {
+      const parts = str.split('/');
       if (parts.length === 3) {
         publicationDate = `${parts[0]}-${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')}`;
       }
-    } else if (typeof rawPublicationDate === 'string' && rawPublicationDate.length === 4) {
-      publicationDate = `${rawPublicationDate}-01-01`;
-    } else if (typeof rawPublicationDate === 'string') {
-      publicationDate = rawPublicationDate.split('T')[0];
+    } else {
+      publicationDate = str.split('T')[0];
     }
-  } else if (paperData.publish_year) {
-    publicationDate = `${paperData.publish_year}-01-01`;
   }
 
   const normalizedAuthors = parseAuthors(
@@ -122,17 +126,17 @@ export const normalizeImportedPaper = (paperData = {}) => {
   return {
     title: paperData.title || paperData.article_title || paperData.name || paperData['dc:title'] || '',
     authors: normalizedAuthors,
-    journal: paperData.journal || paperData.publicationName || paperData.publication_name || paperData.publisher || paperData.venue || paperData.source_title || paperData['prism:publicationName'] || paperData.extractedJournal || '',
+    journal: paperData.journal || paperData.publicationName || paperData.publication_name || paperData.publisher || paperData.venue || paperData.publication_summary || paperData.source_title || paperData['prism:publicationName'] || paperData.extractedJournal || '',
     doi: normalizeDoi(paperData.doi || paperData.article_doi || paperData.prism_doi || paperData['prism:doi'] || paperData.extractedDoi || ''),
     publicationDate,
     volume: paperData.volume || paperData.prism_volume || paperData['prism:volume'] || paperData.biblio?.volume || '',
     issue: paperData.issue || paperData.issueIdentifier || paperData.issue_identifier || paperData['prism:issueIdentifier'] || paperData.biblio?.issue || '',
-    abstract: paperData.abstract || paperData.description || paperData.dc_description || paperData['dc:description'] || paperData.extractedAbstract || '',
+    abstract: paperData.abstract || paperData.snippet || paperData.description || paperData.dc_description || paperData['dc:description'] || paperData.extractedAbstract || '',
     keywords: normalizedKeywords,
     source: paperData.source || '',
     eid: paperData.eid || '',
     scholar_url: paperData.scholar_url || '',
-    publish_year: paperData.publish_year || '',
+    publish_year: paperData.publish_year || paperData.year || paperData.pub_year || '',
     cited_by: paperData.cited_by || 0,
     metadata_enriched_at: paperData.metadata_enriched_at || null,
     metadata_source: paperData.metadata_source || null,
@@ -174,10 +178,10 @@ export const mergeMissingPaperFields = (source, enriched) => {
 
 export const needsDoiEnrichment = (paper) =>
   [
+    paper.journal,
     paper.abstract,
-    paper.keywords,
     paper.volume,
-    paper.issue
+    paper.publicationDate
   ].some(isBlank);
 
 export { isBlank, normalizeDoi, parseKeywords, parseAuthors };

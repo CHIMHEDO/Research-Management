@@ -297,14 +297,20 @@ const [staffList, setStaffList] = useState([]);
       return;
     }
 
-    const base = Math.floor((100 / count) * 10) / 10;
-    const remainder = Number((100 - (base * count)).toFixed(1));
+    const base = Math.floor((100 / count) * 100) / 100;
+    const remainder = Number((100 - (base * count)).toFixed(2));
     
+    // โยนเศษส่วนที่เหลือให้ First author (คนแรกสุด) เสมอ เพื่อรักษาเกณฑ์ First >= Corresponding >= Co
+    const firstIdx = (form.authorList || []).findIndex(a => 
+      a.role === AUTHOR_ROLE.FIRST || a.role === AUTHOR_ROLE.FIRST_AND_CORRESPONDING || a.authorType === AUTHOR_ROLE.FIRST
+    );
+    const targetIdx = firstIdx >= 0 ? firstIdx : 0;
+
     setForm(prev => ({
       ...prev,
       authorList: (prev.authorList || []).map((author, idx) => ({
         ...author,
-        proportion: idx === 0 ? Number((base + remainder).toFixed(1)) : base
+        proportion: idx === targetIdx ? Number((base + remainder).toFixed(2)) : base
       }))
     }));
   };
@@ -358,29 +364,236 @@ const [staffList, setStaffList] = useState([]);
     return true;
   };
 
+// 1. Helper สำหรับแปลงวันที่จาก CrossRef เป็น YYYY-MM-DD ที่มี Zero Padding
+const parseCrossRefDate = (item) => {
+  if (!item) return '';
+
+  // เช็กตำแหน่งวันที่เรียงตามลำดับความสำคัญ
+  const dateParts = 
+    item['published-print']?.['date-parts']?.[0] ||
+    item['published-online']?.['date-parts']?.[0] ||
+    item['published']?.['date-parts']?.[0] ||
+    item['issued']?.['date-parts']?.[0] ||
+    item['created']?.['date-parts']?.[0];
+
+  if (!dateParts || !Array.isArray(dateParts) || dateParts.length === 0) {
+    return '';
+  }
+
+  const year = dateParts[0];
+  const month = dateParts[1] ? String(dateParts[1]).padStart(2, '0') : '01';
+  const day = dateParts[2] ? String(dateParts[2]).padStart(2, '0') : '01';
+
+  return `${year}-${month}-${day}`; // ส่งกลับฟอร์แมต YYYY-MM-DD เช่น "2026-05-15"
+};
+
+// 2. ปรับปรุงฟังก์ชัน fetchMetadataFromCrossRef (พร้อม OpenAlex fallback สำหรับ Keywords)
+const fetchMetadataFromCrossRef = async (title) => {
+  try {
+    if (!title) return null;
+    const cleanTitle = title.replace(/[^\w\s]/gi, '').trim();
+    const url = `https://api.crossref.org/works?query.title=${encodeURIComponent(cleanTitle)}&rows=1`;
+    
+    let resultData = {
+      doi: '',
+      journal: '',
+      volume: '',
+      issue: '',
+      abstract: '',
+      publicationDate: '',
+      keywords: ''
+    };
+
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      const item = data?.message?.items?.[0];
+      
+      if (item) {
+        console.log('[CrossRef Raw Item]:', item);
+        resultData = {
+          doi: item.DOI || '',
+          journal: item['container-title']?.[0] || item.publisher || '',
+          volume: item.volume || '',
+          issue: item.issue || item['issue-identifier'] || '',
+          abstract: item.abstract ? item.abstract.replace(/<[^>]*>/g, '').trim() : '',
+          publicationDate: parseCrossRefDate(item),
+          keywords: item.subject ? (Array.isArray(item.subject) ? item.subject.join(', ') : item.subject) : ''
+        };
+      }
+    }
+
+    // 🔍 Fallback OpenAlex: ถ้า Keywords หรือ Abstract ยังว่างเปล่า ให้ยิง OpenAlex API เพิ่มเติม (ฟรี ไม่ต้องใช้ API Key)
+    if ((!resultData.keywords || !resultData.abstract) && (resultData.doi || cleanTitle)) {
+      try {
+        const oaUrl = resultData.doi
+          ? `https://api.openalex.org/works/doi:${encodeURIComponent(resultData.doi)}`
+          : `https://api.openalex.org/works?filter=title.search:${encodeURIComponent(cleanTitle)}&per-page=1`;
+
+        const oaRes = await fetch(oaUrl);
+        if (oaRes.ok) {
+          const oaData = await oaRes.json();
+          const oaItem = resultData.doi ? oaData : oaData?.results?.[0];
+
+          if (oaItem) {
+            console.log('[OpenAlex Raw Item]:', oaItem);
+
+            // ดึง Keywords จาก OpenAlex (keywords หรือ concepts)
+            if (!resultData.keywords) {
+              const kwList = (oaItem.keywords || []).map(k => k.display_name)
+                .concat((oaItem.concepts || []).slice(0, 5).map(c => c.display_name));
+              if (kwList.length > 0) {
+                resultData.keywords = Array.from(new Set(kwList)).join(', ');
+              }
+            }
+
+            // ดึง Abstract จาก OpenAlex Inverted Index
+            if (!resultData.abstract && oaItem.abstract_inverted_index) {
+              const arr = [];
+              for (const [word, pos] of Object.entries(oaItem.abstract_inverted_index)) {
+                pos.forEach(p => { arr[p] = word; });
+              }
+              resultData.abstract = arr.join(' ').trim();
+            }
+
+            if (!resultData.journal && oaItem.primary_location?.source?.display_name) {
+              resultData.journal = oaItem.primary_location.source.display_name;
+            }
+          }
+        }
+      } catch (oaErr) {
+        console.warn('[OpenAlex Direct] Fetch failed:', oaErr.message);
+      }
+    }
+
+    return resultData.doi || resultData.journal || resultData.abstract || resultData.keywords ? resultData : null;
+  } catch (err) {
+    console.warn('[CrossRef/OpenAlex] Fetch failed:', err);
+    return null;
+  }
+};
+
+// Helper สำหรับแปลงวันที่ให้อยู่ในฟอร์แมต YYYY-MM-DD ของ <input type="date">
+const formatToInputDate = (dateStr) => {
+  if (!dateStr) return '';
+  const str = String(dateStr).trim();
+  
+  // กรณีได้มาแค่ปี 4 หลัก เช่น "2026" -> "2026-01-01"
+  if (/^\d{4}$/.test(str)) {
+    return `${str}-01-01`;
+  }
+  // กรณีได้มาเป็น YYYY-MM เช่น "2026-05" -> "2026-05-01"
+  if (/^\d{4}-\d{2}$/.test(str)) {
+    return `${str}-01`;
+  }
+  // กรณีได้เป็น Date Object หรือ ISO String
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0];
+  }
+  return '';
+};
+
 const handleImportFromScholar = async (paperData, userObj) => {
   try {
     // 1. Normalize imported paper data (single source of truth)
     let paper = normalizeImportedPaper(paperData);
 
-    // 2. DOI Enrichment (backend) - only for missing fields
-    if (paper.doi && needsDoiEnrichment(paper)) {
+    // 2. Data Enrichment - ถ้าขาดข้อมูลสำคัญ (DOI หรือ Journal) ให้ดึงข้อมูลเพิ่มจาก Backend / CrossRef Direct
+    if (!paper.doi || !paper.journal || needsDoiEnrichment(paper)) {
       try {
-        console.log('[Import] Enriching via DOI:', paper.doi);
-        const response = await fetch(`${API_URL}/papers/enrich-by-doi`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ doi: paper.doi })
-        });
-        if (response.ok) {
-          const result = await response.json();
-          if (result.success && result.data) {
-            paper = mergeMissingPaperFields(paper, result.data);
-            console.log('[Import] DOI enrichment successful, source:', result.data.metadata_source);
+        console.log('[Import] Enriching paper metadata...');
+        
+        // ลองยิง Backend ก่อน
+        const endpoint = paper.doi 
+          ? `${API_URL}/papers/enrich-by-doi` 
+          : `${API_URL}/papers/enrich-by-title`;
+          
+        const bodyPayload = paper.doi 
+          ? { doi: paper.doi } 
+          : { title: paper.title };
+
+        let enrichedSuccess = false;
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(bodyPayload)
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            if (result.success && result.data) {
+              // 🌟 1. ดักจับและแปลง Keywords จาก OpenAlex (concepts) หรือ CrossRef (subject)
+              let extractedKeywords = result.data.keywords;
+
+              if (!extractedKeywords || (Array.isArray(extractedKeywords) && extractedKeywords.length === 0)) {
+                if (result.data.concepts && result.data.concepts.length > 0) {
+                  // ดึง display_name จาก OpenAlex มาต่อกันด้วยลูกน้ำ
+                  extractedKeywords = result.data.concepts.map(c => typeof c === 'string' ? c : c.display_name).filter(Boolean).join(', ');
+                } else if (result.data.subject && result.data.subject.length > 0) {
+                  // แปลง Array จาก CrossRef ให้เป็นข้อความ
+                  extractedKeywords = (Array.isArray(result.data.subject) ? result.data.subject : [result.data.subject]).join(', ');
+                }
+              } else if (Array.isArray(extractedKeywords)) {
+                extractedKeywords = extractedKeywords.join(', ');
+              }
+
+              result.data.keywords = extractedKeywords || '';
+
+              if (Array.isArray(paper.keywords)) {
+                paper.keywords = paper.keywords.join(', ');
+              }
+
+              // 🌟 2. โค้ด Backup Authors
+              const originalAuthors = paper.authors;
+              const originalAuthorsRaw = paper.authors_raw;
+
+              // 🌟 3. ทำการ Merge Metadata 
+              paper = mergeMissingPaperFields(paper, result.data);
+
+              // 🌟 4. คืนค่า Authors เดิม
+              if (originalAuthors && (Array.isArray(originalAuthors) ? originalAuthors.length > 0 : Boolean(originalAuthors))) {
+                paper.authors = originalAuthors;
+                if (originalAuthorsRaw) {
+                  paper.authors_raw = originalAuthorsRaw;
+                }
+              }
+
+              enrichedSuccess = true;
+              console.log('[Import] Backend enrichment successful via:', result.data.metadata_source || 'crossref/openalex');
+            }
+          }
+        } catch (bErr) {
+          console.warn('[Import] Backend enrichment endpoint failed/unavailable:', bErr.message);
+        }
+
+        // Fallback: ยิง CrossRef API โดยตรงจาก Frontend หาก Backend ยังไม่มีข้อมูล
+        if (!enrichedSuccess && paper.title) {
+          console.log('[Import] Searching full metadata via CrossRef Direct for title:', paper.title);
+          const enriched = await fetchMetadataFromCrossRef(paper.title);
+          if (enriched) {
+            // Prefer enriched publicationDate if enriched has it (especially if paper.publicationDate is default/empty)
+            const preferEnrichedDate = enriched.publicationDate && (
+              !paper.publicationDate || 
+              paper.publicationDate.endsWith('-01-01')
+            );
+
+            paper = {
+              ...paper,
+              doi: paper.doi || enriched.doi,
+              journal: paper.journal || enriched.journal,
+              volume: paper.volume || enriched.volume,
+              issue: paper.issue || enriched.issue,
+              abstract: paper.abstract || enriched.abstract,
+              keywords: paper.keywords || (Array.isArray(enriched.keywords) ? enriched.keywords.join(', ') : (enriched.keywords || '')),
+              publicationDate: preferEnrichedDate ? enriched.publicationDate : (paper.publicationDate || enriched.publicationDate)
+            };
+            console.log('[Import] Successfully enriched paper data from CrossRef Direct:', paper);
           }
         }
       } catch (enrichErr) {
-        console.warn('[Import] DOI enrichment failed:', enrichErr.message);
+        console.warn('[Import] Enrichment failed, using initial metadata:', enrichErr.message);
         // Continue with original data - don't block form
       }
     }
@@ -403,7 +616,8 @@ const handleImportFromScholar = async (paperData, userObj) => {
     );
 
     const authorCount = parsedAuthors.length;
-    const equalProportion = authorCount > 0 ? Math.floor((100 / authorCount) * 100) / 100 : 0;
+    const baseProportion = authorCount > 0 ? Math.floor((100 / authorCount) * 100) / 100 : 0;
+    const proportionRemainder = authorCount > 0 ? Number((100 - baseProportion * authorCount).toFixed(2)) : 0;
 
     const authorList = parsedAuthors.map((author, index) => {
       const isFirst = index === 0;
@@ -431,9 +645,10 @@ const handleImportFromScholar = async (paperData, userObj) => {
         }
       }
 
-      const proportion = isLast && authorCount > 1
-        ? Number((100 - equalProportion * (authorCount - 1)).toFixed(2))
-        : equalProportion;
+      // โยนเศษส่วนที่เหลือให้ First author (index 0) เสมอ เพื่อให้สัดส่วน First >= Corresponding >= Co
+      const proportion = isFirst
+        ? Number((baseProportion + proportionRemainder).toFixed(2))
+        : baseProportion;
 
       return {
         ...author,
@@ -449,13 +664,13 @@ const handleImportFromScholar = async (paperData, userObj) => {
     // 5. Update form with all normalized + enriched data
     setForm(prev => ({
       ...prev,
-      title: paper.title,
-      journal: paper.journal,
-      doi: paper.doi,
-      publicationDate: paper.publicationDate,
-      volume: paper.volume,
-      issue: paper.issue,
-      abstract: paper.abstract,
+      title: paper.title || '',
+      journal: paper.journal || paper.venue || paper.publisher || '',
+      doi: paper.doi || '',
+      publicationDate: formatToInputDate(paper.publicationDate || paper.year || paper.pub_year),
+      volume: paper.volume || '',
+      issue: paper.issue || '',
+      abstract: paper.abstract || paper.snippet || '',
       keywords: Array.isArray(paper.keywords) ? paper.keywords.join(', ') : (paper.keywords || ''),
       source: paper.source || '',
       authorList,
@@ -469,8 +684,9 @@ const handleImportFromScholar = async (paperData, userObj) => {
     setForm(prev => ({
       ...prev,
       title: paperData.title || '',
-      journal: paperData.journal || '',
+      journal: paperData.journal || paperData.venue || '',
       doi: paperData.doi || '',
+      publicationDate: formatToInputDate(paperData.pub_year || paperData.year),
       authorList: parseImportedAuthors(paperData.authors_raw || paperData.authors || '')
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
