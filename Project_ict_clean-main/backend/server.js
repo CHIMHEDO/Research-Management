@@ -378,12 +378,30 @@ app.post("/api/entries", async (req, res) => {
       }
     }
 
-    const submitterIdentifier = (authorName || userEmail || 'submitter').toLowerCase().trim();
-    const existingConfirmedBy = parsedDateInfo.confirmation?.confirmed_by || [submitterIdentifier];
-    const initialDeadline = parsedDateInfo.confirmation?.deadline || new Date(Date.now() + 7 * 86400000).toISOString();
+    const isUpdate = !!req.body.id;
+    // ดึงข้อมูลตัวตนของผู้ที่กำลังกดบันทึก/แก้ไขในขณะนี้ (Active Editor / Submitter)
+    const currentEditorEmail = (req.body.editorEmail || req.body.userEmail || req.body.user_email || '').toLowerCase().trim();
+    const currentEditorName = (req.body.editorName || req.body.userName || req.body.userFullName || '').toLowerCase().trim();
+    const currentEditorId = (req.body.editorId || req.body.userId || req.body.user_id) ? String(req.body.editorId || req.body.userId || req.body.user_id).trim() : '';
+
+    const activeEditorIdentifiers = [currentEditorEmail, currentEditorName, currentEditorId].filter(Boolean);
     const isOnlyOneAuthor = (processedAuthorList?.length || 1) <= 1;
 
-    // ตรวจสอบว่าผู้แต่งทุกคนกดยืนยันครบแล้วจริงหรือไม่
+    // BR-04 & BR-06: หากเป็นการแก้ไขผลงาน/สัดส่วน รีเซ็ตสถานะการยืนยันของทุกคน และเริ่มนับ 7 วันใหม่ทันที
+    let initialDeadline = new Date(Date.now() + 7 * 86400000).toISOString();
+    let existingConfirmedBy;
+    let revisionCount = parsedDateInfo.confirmation?.revision_count || 0;
+
+    if (isUpdate) {
+      // มีการแก้ไข -> นับ 7 วันใหม่ และบันทึกเฉพาะคนที่กดแก้ไขเป็นผู้ยืนยัน ส่วนสมาชิกคนอื่น (รวมถึงคนสร้างการ์ดเดิม) ต้องกดยืนยันใหม่
+      existingConfirmedBy = activeEditorIdentifiers.length > 0 ? activeEditorIdentifiers : [(authorName || 'submitter').toLowerCase().trim()];
+      revisionCount += 1;
+    } else {
+      // บันทึกใหม่ครั้งแรก
+      existingConfirmedBy = activeEditorIdentifiers.length > 0 ? activeEditorIdentifiers : [(authorName || 'submitter').toLowerCase().trim()];
+    }
+
+    // BR-03 & BR-05: ตรวจสอบว่าผู้แต่งทุกคนกดยืนยันครบแล้วจริงหรือไม่
     let isAllConfirmed = false;
     if (isOnlyOneAuthor) {
       isAllConfirmed = true;
@@ -391,7 +409,7 @@ app.post("/api/entries", async (req, res) => {
       const confirmedSet = new Set(existingConfirmedBy.map(c => String(c).toLowerCase().trim()));
       isAllConfirmed = (processedAuthorList || []).every(author => {
         const aName = (author.name || "").toLowerCase().trim();
-        if (!aName) return true;
+        if (!aName) return false;
         for (const c of confirmedSet) {
           if (c && (c.includes(aName) || aName.includes(c))) return true;
         }
@@ -402,6 +420,10 @@ app.post("/api/entries", async (req, res) => {
     parsedDateInfo.confirmation = {
       status: isAllConfirmed ? "CONFIRMED" : "PENDING",
       deadline: initialDeadline,
+      last_modified_at: new Date().toISOString(),
+      last_editor_email: currentEditorEmail || null,
+      last_editor_name: currentEditorName || null,
+      revision_count: revisionCount,
       confirmed_by: existingConfirmedBy,
       author_list: processedAuthorList || []
     };
@@ -433,9 +455,9 @@ app.post("/api/entries", async (req, res) => {
       .from("entries").select("*").order("created_at", { ascending: false });
     if (fetchError) throw fetchError;
 
-    // 📧 ส่งอีเมลแจ้งเตือนผู้แต่งทุกคนที่พบใน Database อัตโนมัติ (Async Background)
+    // BR-01: 📧 ส่งอีเมลแจ้งเตือนผู้แต่งทุกคนที่พบใน Database อัตโนมัติ (เมื่อเพิ่มใหม่หรือแก้ไขสัดส่วน)
     if (Array.isArray(processedAuthorList) && processedAuthorList.length > 0) {
-      console.log(`[Email Workflow] ตรวจพบผู้แต่ง ${processedAuthorList.length} คน สำหรับบทความ: "${title || 'ผลงานวิจัย'}" กำลังเริ่มค้นหาในฐานข้อมูลและส่งอีเมลแจ้งเตือนทันที...`);
+      console.log(`[Email Workflow] ตรวจพบผู้แต่ง ${processedAuthorList.length} คน สำหรับบทความ: "${title || 'ผลงานวิจัย'}" (${isUpdate ? 'มีการแก้ไขสัดส่วน - ส่งแจ้งเตือนใหม่' : 'บันทึกใหม่'}) กำลังส่งอีเมลแจ้งเตือน...`);
       triggerCoAuthorNotificationWorkflow({
         paperId: id,
         submitterUserId: req.body.userId || null,

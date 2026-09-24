@@ -886,6 +886,67 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
     };
   };
 
+  // 🤝 Helper: ตรวจสอบว่าผู้ใช้ปัจจุบันมีสิทธิ์กดยืนยันสัดส่วนผลงานนี้หรือไม่
+  const canUserConfirmPaper = (entry, currentUser = user, currentStaffList = staffList) => {
+    if (!entry || !currentUser) return false;
+    if (entry.confirmation_status !== 'PENDING') return false;
+
+    const userEmails = [currentUser.email].filter(Boolean).map(e => e.toLowerCase().trim());
+    const userNames = [
+      currentUser.name_th,
+      currentUser.name_en,
+      currentUser.full_name,
+      currentUser.name
+    ].filter(Boolean).map(n => normalizeName(n)).filter(Boolean);
+
+    if (currentUser.email && currentStaffList && currentStaffList.length > 0) {
+      const matchedStaff = currentStaffList.find(s => s.email && s.email.toLowerCase().trim() === currentUser.email.toLowerCase().trim());
+      if (matchedStaff) {
+        if (matchedStaff.name_th) userNames.push(normalizeName(matchedStaff.name_th));
+        if (matchedStaff.name_en) userNames.push(normalizeName(matchedStaff.name_en));
+        if (matchedStaff.full_name) userNames.push(normalizeName(matchedStaff.full_name));
+      }
+    }
+
+    // 1. ตรวจสอบว่าเคยยืนยันในฉบับล่าสุดนี้แล้วหรือยัง
+    const confirmedByList = (entry.confirmed_by || []).map(c => normalizeName(String(c))).filter(Boolean);
+    const isAlreadyConfirmed = confirmedByList.some(c => {
+      if (!c || c === 'submitter') return false;
+      const emailMatch = userEmails.some(em => em && (c === normalizeName(em) || c.includes(normalizeName(em))));
+      if (emailMatch) return true;
+      const nameMatch = userNames.some(un => un && un.length >= 3 && (c === un || (c.length >= 4 && un.includes(c)) || (un.length >= 4 && c.includes(un))));
+      return nameMatch;
+    });
+
+    if (isAlreadyConfirmed) return false;
+
+    // 2. ตรวจสอบว่าผู้ใช้นี้เป็นหนึ่งในผู้แต่งหรือผู้สร้างผลงานนี้ (รวมถึงคนสร้างการ์ดเดิม หากคนอื่นเข้ามาแก้ไข)
+    const isCreator = Boolean(entry.user_id && String(entry.user_id) === String(currentUser.id));
+    const isSubmitterEmail = Boolean(entry.submitter_email && userEmails.includes(entry.submitter_email.toLowerCase().trim()));
+
+    let isAuthor = isCreator || isSubmitterEmail;
+
+    if (!isAuthor && Array.isArray(entry.author_list) && entry.author_list.length > 0) {
+      isAuthor = entry.author_list.some(a => {
+        const aName = normalizeName(a.name || '');
+        if (!aName) return false;
+        return userNames.some(un => aName.includes(un) || un.includes(aName));
+      });
+    }
+
+    if (!isAuthor && entry.authors) {
+      const rawAuthors = normalizeName(entry.authors);
+      isAuthor = userNames.some(un => rawAuthors.includes(un));
+    }
+
+    if (!isAuthor && entry.authorName) {
+      const aName = normalizeName(entry.authorName);
+      isAuthor = userNames.some(un => aName.includes(un) || un.includes(aName));
+    }
+
+    return isAuthor;
+  };
+
   // ฟังก์ชันบันทึกข้อมูลไปยัง Backend
   const handleSave = async () => {
     // 🌟 Validate authors form before saving
@@ -913,6 +974,11 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
       id: entryId,
       userId: user?.id || null,
       userEmail: user?.email || null,
+      editorId: user?.id || null,
+      editorEmail: user?.email || null,
+      editorName: user?.name_th || user?.name_en || user?.full_name || user?.email || "",
+      userName: user?.name_th || user?.name_en || user?.full_name || "",
+      userFullName: user?.name_th || user?.name_en || user?.full_name || "",
       authorName: resolvedAuthorName,
       author: activePreview.effectiveRole || form.author,
       proportion: activePreview.userProportion ?? form.proportion ?? 100,
@@ -2322,54 +2388,31 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                           })()}
                         </div>
                         <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                            {/* ปุ่มกดยืนยันสัดส่วนสำหรับผู้ร่วมงาน */}
-                            {(() => {
-                              const userNameTh = (user?.name_th || '').toLowerCase().trim();
-                              const userNameEn = (user?.name_en || '').toLowerCase().trim();
-                              const userFullName = (user?.full_name || '').toLowerCase().trim();
-                              const userEmail = (user?.email || '').toLowerCase().trim();
-                              
-                              const confirmedByList = (e.confirmed_by || []).map(c => String(c).toLowerCase().trim());
-                              const isAlreadyConfirmed = confirmedByList.some(c => 
-                                (userNameTh && c.includes(userNameTh)) || 
-                                (userNameEn && c.includes(userNameEn)) || 
-                                (userFullName && c.includes(userFullName)) || 
-                                (userEmail && c.includes(userEmail))
-                              );
-
-                              const isCoAuthorInPaper = (e.authors || '').toLowerCase().includes(userNameTh) ||
-                                                        (e.authors || '').toLowerCase().includes(userNameEn) ||
-                                                        (e.authorName || '').toLowerCase().includes(userNameTh) ||
-                                                        (e.authorName || '').toLowerCase().includes(userNameEn);
-
-                              if (e.confirmation_status === 'PENDING' && isCoAuthorInPaper && !isAlreadyConfirmed) {
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmProportion(e.id)}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: "4px",
-                                      padding: "5px 10px",
-                                      borderRadius: "6px",
-                                      border: "none",
-                                      background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-                                      color: "#ffffff",
-                                      fontSize: "12px",
-                                      fontWeight: "700",
-                                      cursor: "pointer",
-                                      boxShadow: "0 2px 4px rgba(16, 185, 129, 0.25)"
-                                    }}
-                                    title="กดยืนยันสัดส่วนผู้แต่งของคุณสำหรับผลงานนี้"
-                                  >
-                                    <CheckCircle2 size={13} />
-                                    <span>ยืนยันสัดส่วน</span>
-                                  </button>
-                                );
-                              }
-                              return null;
-                            })()}
+                            {/* ปุ่มกดยืนยันสัดส่วนสำหรับผู้ร่วมงาน และคนสร้างการ์ด (กรณีผู้อื่นเข้ามาแก้ไข) */}
+                            {canUserConfirmPaper(e) && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmProportion(e.id)}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  padding: "5px 10px",
+                                  borderRadius: "6px",
+                                  border: "none",
+                                  background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                                  color: "#ffffff",
+                                  fontSize: "12px",
+                                  fontWeight: "700",
+                                  cursor: "pointer",
+                                  boxShadow: "0 2px 4px rgba(16, 185, 129, 0.25)"
+                                }}
+                                title="กดยืนยันสัดส่วนผู้แต่งของคุณสำหรับผลงานนี้"
+                              >
+                                <CheckCircle2 size={13} />
+                                <span>ยืนยันสัดส่วน</span>
+                              </button>
+                            )}
 
                             <button
                               type="button"
@@ -2694,52 +2737,29 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                         </td>
                         <td style={{ textAlign: "center" }}>
                           <div style={{ display: "flex", justifyContent: "center", gap: "6px", alignItems: "center" }}>
-                            {(() => {
-                              const userNameTh = (user?.name_th || '').toLowerCase().trim();
-                              const userNameEn = (user?.name_en || '').toLowerCase().trim();
-                              const userFullName = (user?.full_name || '').toLowerCase().trim();
-                              const userEmail = (user?.email || '').toLowerCase().trim();
-                              
-                              const confirmedByList = (e.confirmed_by || []).map(c => String(c).toLowerCase().trim());
-                              const isAlreadyConfirmed = confirmedByList.some(c => 
-                                (userNameTh && c.includes(userNameTh)) || 
-                                (userNameEn && c.includes(userNameEn)) || 
-                                (userFullName && c.includes(userFullName)) || 
-                                (userEmail && c.includes(userEmail))
-                              );
-
-                              const isCoAuthorInPaper = (e.authors || '').toLowerCase().includes(userNameTh) ||
-                                                        (e.authors || '').toLowerCase().includes(userNameEn) ||
-                                                        (e.authorName || '').toLowerCase().includes(userNameTh) ||
-                                                        (e.authorName || '').toLowerCase().includes(userNameEn);
-
-                              if (e.confirmation_status === 'PENDING' && isCoAuthorInPaper && !isAlreadyConfirmed) {
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmProportion(e.id)}
-                                    style={{
-                                      display: "inline-flex",
-                                      alignItems: "center",
-                                      gap: "3px",
-                                      padding: "4px 8px",
-                                      borderRadius: "6px",
-                                      border: "none",
-                                      background: "#10b981",
-                                      color: "#ffffff",
-                                      fontSize: "11px",
-                                      fontWeight: "700",
-                                      cursor: "pointer"
-                                    }}
-                                    title="กดยืนยันสัดส่วนผู้แต่ง"
-                                  >
-                                    <CheckCircle2 size={12} />
-                                    <span>ยืนยันสัดส่วน</span>
-                                  </button>
-                                );
-                              }
-                              return null;
-                            })()}
+                            {canUserConfirmPaper(e) && (
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmProportion(e.id)}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
+                                  padding: "4px 8px",
+                                  borderRadius: "6px",
+                                  border: "none",
+                                  background: "#10b981",
+                                  color: "#ffffff",
+                                  fontSize: "11px",
+                                  fontWeight: "700",
+                                  cursor: "pointer"
+                                }}
+                                title="กดยืนยันสัดส่วนผู้แต่ง"
+                              >
+                                <CheckCircle2 size={12} />
+                                <span>ยืนยันสัดส่วน</span>
+                              </button>
+                            )}
 
                             <button
                               type="button"
