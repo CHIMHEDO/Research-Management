@@ -599,7 +599,20 @@ function calculateFacultyFunding(type, author, baseFaculty) {
 
 function getWorkloadCycleInfo(dateInput) {
   if (!dateInput) return null;
-  const d = dateInput instanceof Date ? dateInput : new Date(typeof dateInput === "string" && !dateInput.includes("T") ? dateInput + "T00:00:00" : dateInput);
+  let d;
+  if (dateInput instanceof Date) {
+    d = dateInput;
+  } else {
+    const str = String(dateInput).trim();
+    if (/^\d{4}$/.test(str)) {
+      let y = parseInt(str, 10);
+      if (y > 2400) y -= 543;
+      d = new Date(y, 0, 1);
+    } else {
+      d = new Date(str.includes("T") ? str : str + "T00:00:00");
+      if (Number.isNaN(d.getTime())) d = new Date(str);
+    }
+  }
   if (Number.isNaN(d.getTime())) return null;
   const y = d.getFullYear();
   const beYear = y + 543;
@@ -1206,6 +1219,19 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
       if (userNameEn && authors && authors.includes(userNameEn)) return true;
       if (userFullName && authors && authors.includes(userFullName)) return true;
 
+      // 5. ตรวจสอบใน author_list / authorList array
+      const list = Array.isArray(e.author_list) ? e.author_list : (Array.isArray(e.authorList) ? e.authorList : []);
+      if (list.length > 0) {
+        return list.some(a => {
+          const aName = (a.name || '').toLowerCase().trim();
+          if (!aName) return false;
+          if (userNameTh && (aName.includes(userNameTh) || userNameTh.includes(aName))) return true;
+          if (userNameEn && (aName.includes(userNameEn) || userNameEn.includes(aName))) return true;
+          if (userFullName && (aName.includes(userFullName) || userFullName.includes(aName))) return true;
+          return false;
+        });
+      }
+
       return false;
     });
   }, [entries, user]);
@@ -1281,9 +1307,9 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
       // 🔒 ตรวจสอบว่าผลงานได้รับการยืนยันหรือผ่าน 7 วันหรือไม่
       const isCounted = e.is_workload_counted !== false;
       if (isCounted) {
-        hours += e.actualHours || 0;
-        faculty += e.faculty || 0;
-        uni += e.uni || 0;
+        hours += Number(e.actualHours ?? e.actual_hours ?? 0);
+        faculty += Number(e.faculty ?? 0);
+        uni += Number(e.uni ?? 0);
         countedCount += 1;
       }
     });
@@ -2190,7 +2216,7 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
 
                 <div className="workload-target-progress-box">
                   <div className="workload-progress-labels">
-                    <span>ภาระงานสะสมในรอบ</span>
+                    <span>{selectedCycleFilter === "ALL" ? "ภาระงานสะสมรวมทุกรอบปี" : "ภาระงานสะสมในรอบ"}</span>
                     <span><b>{totals.hours || 0}</b> ชม.</span>
                   </div>
                 </div>
@@ -2331,9 +2357,11 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                 </p>
               </div>
             ) : viewMode === "card" ? (
-              /* Large Square Cards Grid View Mode */
+              /* Square Cards Grid View Mode */
               <div className="entries-grid-cards">
-                {filteredEntries.map(e => (
+                {filteredEntries.map(e => {
+                  const cardCycleLabel = e.dateInfo?.workloadLabel || (e.publicationDate || e.date ? getWorkloadCycleInfo(e.publicationDate || e.date)?.label : null);
+                  return (
                   <div key={e.id} className="entry-card-square">
                     <div>
                       {/* Top Badges & Delete Action */}
@@ -2341,6 +2369,11 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                         <div className="card-badges-left">
                           <span className="entry-code-badge">{e.code || "เกณฑ์"}</span>
                           {renderDbBadge(e.db)}
+                          {cardCycleLabel && (
+                            <span className="entry-cycle-badge" title="รอบปีภาระงาน">
+                              📅 {cardCycleLabel}
+                            </span>
+                          )}
 
                           {/* Smart Incomplete & Expiry & Disbursement Badges */}
                           {(() => {
@@ -2676,8 +2709,9 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                       );
                     })()}
                   </div>
-                ))}
-              </div>
+                );
+              })}
+            </div>
             ) : (
               /* Table View Mode */
               <div className="table-view-container">

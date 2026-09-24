@@ -27,6 +27,7 @@ import {
   List
 } from 'lucide-react';
 import api from '../api/client';
+import AcademicSyncLoadingModal from './AcademicSyncLoadingModal';
 
 const DEPARTMENT_ORDER = [
   'Computer Graphics and Multimedia',
@@ -808,6 +809,13 @@ const scopusPapers = useMemo(() =>
           )}
         </div>
       )}
+
+      {/* 🚀 Academic Database Live Loading Modal */}
+      <AcademicSyncLoadingModal
+        isOpen={isSyncing || isScopusSyncing}
+        source={isScopusSyncing ? 'scopus' : 'scholar'}
+        customTitle={isScopusSyncing ? 'กำลังซิงค์ข้อมูลผู้ใช้' : 'กำลังดึงข้อมูล'}
+      />
     </div>
   );
 }

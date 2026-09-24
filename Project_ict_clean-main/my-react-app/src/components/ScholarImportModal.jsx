@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import { useAuth } from '../context/AuthContext';
+import AcademicSyncLoadingModal from './AcademicSyncLoadingModal';
 
 export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
   const { user } = useAuth();
@@ -789,6 +790,17 @@ export default function ScholarImportModal({ isOpen, onClose, onSelectPaper }) {
 
         </div> 
       </div> 
+
+      {/* 🚀 Academic Database Live Loading Modal */}
+      <AcademicSyncLoadingModal
+        isOpen={syncing || scopusLoading || fetchingDetail || scopusFetchingDetail}
+        source={
+          scopusLoading ? 'scopus' :
+          syncing ? 'scholar' :
+          (fetchingDetail || scopusFetchingDetail) ? 'detail' : 'scholar'
+        }
+        customTitle={scopusLoading ? 'กำลังซิงค์ข้อมูลผู้ใช้' : 'กำลังดึงข้อมูล'}
+      />
     </div> 
   );
 }

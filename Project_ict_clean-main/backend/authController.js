@@ -202,23 +202,39 @@ exports.loginWithEmail = async (req, res) => {
     // ค้นหาผู้ใช้จากฐานข้อมูล
     let { data: user, error } = await supabase.from('users').select('*').ilike('email', email.toLowerCase().trim()).maybeSingle();
 
-    // ถ้ายังไม่มีใน users ให้ค้นหาใน UP_ICT_FACULTY แล้วสร้างอัตโนมัติ
+    // ถ้ายังไม่มีใน users ให้ค้นหาใน UP_ICT_FACULTY หรือสร้างบัญชี Admin อัตโนมัติ
     if (!user) {
-      const matchedFaculty = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === email.toLowerCase().trim());
-      if (matchedFaculty) {
-        const { data: insertedUser } = await supabase.from('users').insert({
-          email: matchedFaculty.email.toLowerCase().trim(),
-          full_name: matchedFaculty.name_en || matchedFaculty.name_th,
-          name_en: matchedFaculty.name_en,
-          name_th: matchedFaculty.name_th,
-          department: matchedFaculty.department,
-          position: matchedFaculty.position,
-          scholar_id: matchedFaculty.scholar_id,
-          scopus_id: matchedFaculty.scopus_id,
-          role: 'user'
+      const emailClean = email.toLowerCase().trim();
+      if (emailClean === 'admin.ict@up.ac.th' || emailClean === 'admin@up.ac.th') {
+        const { data: insertedAdmin } = await supabase.from('users').insert({
+          email: emailClean,
+          full_name: 'ผู้ดูแลระบบคณะ ICT (Admin)',
+          name_en: 'ICT Administrator',
+          name_th: 'ผู้ดูแลระบบคณะ ICT',
+          department: 'คณะเทคโนโลยีสารสนเทศและการสื่อสาร',
+          position: 'ผู้ดูแลระบบ',
+          role: 'admin'
         }).select('*');
-        if (insertedUser && insertedUser.length > 0) {
-          user = insertedUser[0];
+        if (insertedAdmin && insertedAdmin.length > 0) {
+          user = insertedAdmin[0];
+        }
+      } else {
+        const matchedFaculty = (UP_ICT_FACULTY || []).find(f => f.email && f.email.toLowerCase().trim() === emailClean);
+        if (matchedFaculty) {
+          const { data: insertedUser } = await supabase.from('users').insert({
+            email: matchedFaculty.email.toLowerCase().trim(),
+            full_name: matchedFaculty.name_en || matchedFaculty.name_th,
+            name_en: matchedFaculty.name_en,
+            name_th: matchedFaculty.name_th,
+            department: matchedFaculty.department,
+            position: matchedFaculty.position,
+            scholar_id: matchedFaculty.scholar_id,
+            scopus_id: matchedFaculty.scopus_id,
+            role: 'user'
+          }).select('*');
+          if (insertedUser && insertedUser.length > 0) {
+            user = insertedUser[0];
+          }
         }
       }
     }
