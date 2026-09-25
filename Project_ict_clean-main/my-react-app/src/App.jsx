@@ -2162,17 +2162,7 @@ function computeClientCalculation(formState, currentUser = null, currentStaffLis
                 />
               </div>
 
-              {/* Keywords (คำสำคัญ) */}
-              <div className="form-group">
-                <label className="form-label">Keywords (คำสำคัญ)</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  placeholder="เช่น Machine Learning, NLP, Data Mining (คั่นด้วยจุลภาค)"
-                  value={form.keywords || ""}
-                  onChange={e => setForm({ ...form, keywords: e.target.value })}
-                />
-              </div>
+
 
               {/* ฐานข้อมูล */}
               <div className="form-group">
