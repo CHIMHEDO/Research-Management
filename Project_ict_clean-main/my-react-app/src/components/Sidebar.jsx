@@ -81,6 +81,7 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
           <span>ติดตามการจ่ายเงิน</span>
         </button>
 
+        {/* 
         <button
           type="button"
           onClick={() => setTab('scholar')}
@@ -89,6 +90,7 @@ export default function Sidebar({ tab, setTab, entriesCount }) {
           <Users size={18} />
           <span>ผลงานวิจัย & Google Scholar</span>
         </button>
+        */}
 
         {/* Admin Console Sections (Only for Admin) */}
         {isAdmin && (
